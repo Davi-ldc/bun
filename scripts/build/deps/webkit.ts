@@ -226,7 +226,7 @@ export const webkit: Dependency = {
       return { kind: "none" };
     }
 
-    // Local: nested cmake, target=jsc.
+    // Local: nested cmake, target=jsc (and testjitcache with cfg.jitcacheTwins).
     //
     // CMAKE_C_FLAGS/CMAKE_CXX_FLAGS: overrides the global dep flags source.ts
     // would otherwise pass — WebKit's cmake sets its own -O/-g/sanitizer
@@ -340,6 +340,18 @@ export const webkit: Dependency = {
       // PT_LOAD. Android (PIE) overrides via the -fPIC in optFlags above
       // never being suppressed there.
       ...(cfg.abi !== "android" ? { CMAKE_POSITION_INDEPENDENT_CODE: "OFF" } : {}),
+      // The executables this build links (jsc, and testjitcache in twins builds) carry an ELF build ID, as Bun's
+      // own link gives its executable one (flags.ts): JITCache's artifact header records the build ID and a binary
+      // without one cannot use the cache. This value replaces the CMAKE_EXE_LINKER_FLAGS that emitNestedCmake
+      // passes (source.ts), so it keeps that value's lld selection.
+      ...(cfg.linux
+        ? {
+            CMAKE_EXE_LINKER_FLAGS: [...(cfg.ld ? [`--ld-path=${cfg.ld}`] : []), "-Wl,--build-id=sha1"].join(" "),
+          }
+        : {}),
+      // JITCache's test builds (the debug-local-twins profile). Stated either way, since the CMake cache keeps a
+      // value from an earlier configure of the same build directory.
+      ENABLE_JITCACHE_TWINS: cfg.jitcacheTwins ? "ON" : "OFF",
       PORT: "JSCOnly",
       ENABLE_STATIC_JSC: "ON",
       USE_THIN_ARCHIVES: "OFF",
@@ -363,7 +375,7 @@ export const webkit: Dependency = {
 
     const spec: NestedCmakeBuild = {
       kind: "nested-cmake",
-      targets: ["jsc"],
+      targets: cfg.jitcacheTwins ? ["jsc", "testjitcache"] : ["jsc"],
       args,
       // Release local WebKit keeps debug info so JSC crashes symbolicate.
       // LTO stays plain Release (debug info + LTO bloats significantly).

@@ -13,6 +13,7 @@
  *
  *   debug              → Debug build, prebuilt WebKit (the default)
  *   debug-local        → Debug build, local WebKit (you cloned vendor/WebKit/)
+ *   debug-local-twins  → debug-local plus JITCache's test builds (ENABLE_JITCACHE_TWINS)
  *   release            → Release build, prebuilt WebKit, no LTO
  *   release-local      → Release build, local WebKit
  *   release-assertions → Release + runtime assertions enabled
@@ -38,6 +39,16 @@ export const profiles = {
   "debug-local": {
     buildType: "Debug",
     webkit: "local",
+  },
+
+  /**
+   * debug-local plus JITCache's test builds (ENABLE_JITCACHE_TWINS): the twin checks and test hooks in JSC and
+   * Bun, and `testjitcache` beside `jsc`. Same compile and link flags as debug-local.
+   */
+  "debug-local-twins": {
+    buildType: "Debug",
+    webkit: "local",
+    jitcacheTwins: true,
   },
 
   /** Debug without ASAN — faster builds, less safety. */

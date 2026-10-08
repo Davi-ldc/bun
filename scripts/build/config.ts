@@ -168,6 +168,12 @@ export interface Config {
   // ─── Dependency modes ───
   webkit: WebKitMode;
   /**
+   * JITCache's test builds: local WebKit configured with ENABLE_JITCACHE_TWINS, which compiles JITCache's twin
+   * checks and test hooks into JSC and, through cmakeconfig.h, into Bun's C++, and builds `testjitcache` beside
+   * `jsc`. Set only by the `debug-local-twins` profile. Compile and link flags stay as every local build has them.
+   */
+  jitcacheTwins: boolean;
+  /**
    * Deps built from a local checkout instead of the pinned tarball, keyed by
    * dep name → absolute source dir. Set via `--local-deps=name=path[,...]`.
    * The checkout is used as-is: no fetch, no `.ref` stamp, and the dep's
@@ -354,6 +360,8 @@ export interface PartialConfig {
   ci?: boolean;
   buildkite?: boolean;
   webkit?: WebKitMode;
+  /** See `Config.jitcacheTwins`. False unless the profile sets it. */
+  jitcacheTwins?: boolean;
   /**
    * `name=path[,name=path...]` — build these deps from a local checkout
    * (e.g. `mimalloc=~/code/mimalloc`). `~` expands to $HOME; relative paths
@@ -1213,6 +1221,7 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
     ci,
     buildkite,
     webkit: partial.webkit ?? "prebuilt",
+    jitcacheTwins: partial.jitcacheTwins ?? false,
     localDeps: parseLocalDeps(partial.localDeps, cwd),
     packageManager,
     cwd,
@@ -1583,6 +1592,7 @@ export function formatConfig(cfg: Config, exe: string): string {
   if (!cfg.canary) features.push("canary:off");
   // Non-default modes — show so you notice when a build is unusual.
   if (cfg.webkit !== "prebuilt") features.push(`webkit:${cfg.webkit}`);
+  if (cfg.jitcacheTwins) features.push("jitcache-twins");
   for (const name of Object.keys(cfg.localDeps)) features.push(`local:${name}`);
   if (cfg.packageManager !== "bun") features.push(`package-manager:${cfg.packageManager}`);
   if (cfg.mode !== "full") features.push(`mode:${cfg.mode}`);
