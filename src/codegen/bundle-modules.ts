@@ -8,6 +8,7 @@
 // One day, this entire setup should be rewritten, but also it would be cool if Bun natively
 // supported macros that aren't json value -> json value. Otherwise, I'd use a real JS parser/ast
 // library, instead of RegExp hacks.
+import { createHash } from "crypto";
 import fs from "fs";
 import { mkdir, writeFile } from "fs/promises";
 import { builtinModules } from "node:module";
@@ -411,9 +412,10 @@ writeIfNotChanged(
 //
 // Layout (little-endian u32 unless noted; offsets in the index are relative to `data`):
 //   header:  magic[8] "BUNBLTNS", version, sourceStamp, moduleCount, modulesOffset,
-//            depOffsetsOffset, depsOffset, dataOffset, dataLength, 0, 0
+//            depOffsetsOffset, depsOffset, dataOffset, dataLength, digestsOffset, 0
 //   modules: moduleCount × { nameOffset, nameLength, urlOffset, urlLength, codeOffset, codeLength }
 //   depOffsets: u16[moduleCount + 1], deps: u16[]  (see internalModuleDependencyTable)
+//   digests: moduleCount × u8[32], each module's JITCache source digest (see jitCacheSourceDigest)
 //   data:    [builtin functions combined source][\0][module 0][\0][module 1][\0]...[name\0url\0]...
 // WebCoreJSBuiltins.cpp's internalCombinedSource is the span at data offset 0.
 //
@@ -421,6 +423,14 @@ writeIfNotChanged(
 // here so that a debug bun works as a `--compile` target like any other.
 const BUILTINS_FORMAT_VERSION = 1;
 const BUILTINS_HEADER_SIZE = 48;
+const JITCACHE_SOURCE_DIGEST_SIZE = 32;
+
+// JITCache's source digest of a module's text: SHA-256 of the byte 1, which names the Latin-1 encoding, then the text
+// one byte per character, as JavaScriptCore computes it for an 8-bit string. InternalModuleRegistry.cpp's providers
+// return it, so JITCache keys an internal module without reading its source.
+function jitCacheSourceDigest(latin1Text: Buffer): Buffer {
+  return createHash("sha256").update(Buffer.of(1)).update(latin1Text).digest();
+}
 
 // Identifies these module sources to bytecode generated from them ahead of time (bun build --compile embeds bytecode for
 // the internal modules an app uses); computed over the bundled outputs so it is meaningful in debug builds too.
@@ -482,6 +492,15 @@ let blobDataOffset: number;
     records.push(name.offset, name.length - 1, url.offset, url.length - 1, codeOffset, codeLength);
   }
   const data = Buffer.concat(chunks);
+  // One per module record, in record order, each over exactly the bytes its codeOffset and codeLength span.
+  const digests = Buffer.alloc(nativeStartIndex * JITCACHE_SOURCE_DIGEST_SIZE);
+  moduleList.slice(0, nativeStartIndex).forEach((id, n) => {
+    const { offset: codeOffset, length: codeLength } = code.get(id)!;
+    jitCacheSourceDigest(data.subarray(codeOffset, codeOffset + codeLength)).copy(
+      digests,
+      n * JITCACHE_SOURCE_DIGEST_SIZE,
+    );
+  });
 
   if (internalModuleDependencyTable.flat.length > 0xffff || nativeStartIndex > 0xffff)
     throw new Error("builtins section: dependency table no longer fits its u16 entries; widen depOffsets/deps");
@@ -489,7 +508,8 @@ let blobDataOffset: number;
   const modulesOffset = BUILTINS_HEADER_SIZE;
   const depOffsetsOffset = modulesOffset + records.length * 4;
   const depsOffset = depOffsetsOffset + internalModuleDependencyTable.offsets.length * 2;
-  blobDataOffset = align(depsOffset + internalModuleDependencyTable.flat.length * 2, 16);
+  const digestsOffset = align(depsOffset + internalModuleDependencyTable.flat.length * 2, 16);
+  blobDataOffset = align(digestsOffset + digests.length, 16);
 
   blob = Buffer.alloc(blobDataOffset + data.length);
   blob.write("BUNBLTNS", 0, "latin1");
@@ -502,12 +522,13 @@ let blobDataOffset: number;
     depsOffset,
     blobDataOffset,
     data.length,
-    0,
+    digestsOffset,
     0,
   ].forEach((v, i) => blob.writeUInt32LE(v >>> 0, 8 + i * 4));
   records.forEach((v, i) => blob.writeUInt32LE(v, modulesOffset + i * 4));
   internalModuleDependencyTable.offsets.forEach((v, i) => blob.writeUInt16LE(v, depOffsetsOffset + i * 2));
   internalModuleDependencyTable.flat.forEach((v, i) => blob.writeUInt16LE(v, depsOffset + i * 2));
+  digests.copy(blob, digestsOffset);
   data.copy(blob, blobDataOffset);
 }
 
@@ -560,7 +581,10 @@ struct Header {
   uint32_t depsOffset;
   uint32_t dataOffset;
   uint32_t dataLength;
-  uint32_t reserved[2];
+  // From the section start: moduleCount JITCache source digests of ${JITCACHE_SOURCE_DIGEST_SIZE} bytes, one per module
+  // record in record order, each over the bytes the record's codeOffset and codeLength span.
+  uint32_t digestsOffset;
+  uint32_t reserved;
 };
 static_assert(sizeof(Header) == ${BUILTINS_HEADER_SIZE});
 

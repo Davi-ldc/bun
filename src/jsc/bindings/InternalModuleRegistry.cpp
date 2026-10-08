@@ -21,6 +21,11 @@
 #include <JavaScriptCore/CachedTypes.h>
 #include <JavaScriptCore/CodeCache.h>
 #include <JavaScriptCore/ParserError.h>
+#include <JavaScriptCore/SourceProvider.h>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <span>
 
 // A `bun build --compile` executable may carry ahead-of-time bytecode for the internal modules the app uses
 // (StandaloneModuleGraph, Flags::HAS_BUILTIN_BYTECODE); those bytes live in the executable for the life of the process.
@@ -57,9 +62,44 @@ JSC_DEFINE_HOST_FUNCTION(jsInternalModulesLoadedFromBytecode, (JSC::JSGlobalObje
     return JSValue::encode(jsNumber(s_internalModulesFromBytecode.load(std::memory_order_relaxed)));
 }
 
-static SourceCode makeInternalModuleSource(const String& text, const String& moduleName, const String& urlString)
+using JITCacheSourceDigest = std::span<const uint8_t, 32>;
+
+// The provider of an internal module whose text is the builtins section's. It returns the digest bundle-modules.ts
+// recorded for that text, so JITCache keys the module without reading it.
+class InternalModuleSourceProvider final : public JSC::StringSourceProvider {
+    WTF_DEPRECATED_MAKE_FAST_ALLOCATED(InternalModuleSourceProvider);
+
+public:
+    static Ref<InternalModuleSourceProvider> create(const String& source, const SourceOrigin& sourceOrigin, String&& sourceURL, JITCacheSourceDigest digest)
+    {
+        return adoptRef(*new InternalModuleSourceProvider(source, sourceOrigin, WTF::move(sourceURL), digest));
+    }
+
+    std::optional<std::array<uint8_t, 32>> jitCacheSourceDigest() const final
+    {
+        std::array<uint8_t, 32> digest;
+        std::ranges::copy(m_jitCacheSourceDigest, digest.begin());
+        return digest;
+    }
+
+private:
+    InternalModuleSourceProvider(const String& source, const SourceOrigin& sourceOrigin, String&& sourceURL, JITCacheSourceDigest digest)
+        : JSC::StringSourceProvider(source, sourceOrigin, JSC::SourceTaintedOrigin::Untainted, WTF::move(sourceURL), TextPosition(), JSC::SourceProviderSourceType::Program)
+        , m_jitCacheSourceDigest(digest)
+    {
+    }
+
+    // The table entry itself: the builtins section lives as long as the process.
+    const JITCacheSourceDigest m_jitCacheSourceDigest;
+};
+
+// `digest` is the builtins section's digest of `text` when `text` is that section's module source.
+static SourceCode makeInternalModuleSource(const String& text, const String& moduleName, const String& urlString, std::optional<JITCacheSourceDigest> digest)
 {
-    return JSC::makeSource(text, SourceOrigin(WTF::URL(urlString)), JSC::SourceTaintedOrigin::Untainted, moduleName);
+    SourceOrigin sourceOrigin { WTF::URL(urlString) };
+    if (!digest)
+        return JSC::makeSource(text, sourceOrigin, JSC::SourceTaintedOrigin::Untainted, moduleName);
+    return SourceCode(InternalModuleSourceProvider::create(text, sourceOrigin, String(moduleName), *digest), 1, 1);
 }
 
 static UnlinkedFunctionExecutable* createInternalModuleExecutable(JSC::VM& vm, const SourceCode& source, const String& moduleName)
@@ -94,11 +134,28 @@ static String internalModuleSource(uint32_t id)
     }
     return WTF::String::fromUTF8(contents.value());
 }
+
+// The text comes from disk, which the section's digest does not describe, so the provider supplies none and JITCache
+// digests the text itself. scripts/build/flags.ts defines BUN_DYNAMIC_JS_LOAD_PATH in every debug build outside CI,
+// JITCache's twins builds included.
+static std::optional<JITCacheSourceDigest> internalModuleSourceDigest(uint32_t)
+{
+    return std::nullopt;
+}
 #else
 static String internalModuleSource(uint32_t id)
 {
     const auto& m = internalModuleRecord(id);
     return internalModuleString(m.codeOffset, m.codeLength);
+}
+
+// The section's digest of internalModuleSource(id), entry `id` of the table that bundle-modules.ts writes.
+static std::optional<JITCacheSourceDigest> internalModuleSourceDigest(uint32_t id)
+{
+    ASSERT(id < bun_internal_modules_header.moduleCount);
+    ASSERT(bun_internal_modules_header.digestsOffset);
+    auto* digests = reinterpret_cast<const uint8_t*>(&bun_internal_modules_header) + bun_internal_modules_header.digestsOffset;
+    return JITCacheSourceDigest { digests + static_cast<size_t>(id) * JITCacheSourceDigest::extent, JITCacheSourceDigest::extent };
 }
 #endif
 
@@ -107,7 +164,7 @@ JSC::JSValue generateInternalModule(JSC::JSGlobalObject* globalObject, JSC::VM& 
     auto throwScope = DECLARE_THROW_SCOPE(vm);
     const auto& m = internalModuleRecord(id);
     String moduleName = internalModuleString(m.nameOffset, m.nameLength);
-    SourceCode source = makeInternalModuleSource(internalModuleSource(id), moduleName, internalModuleString(m.urlOffset, m.urlLength));
+    SourceCode source = makeInternalModuleSource(internalModuleSource(id), moduleName, internalModuleString(m.urlOffset, m.urlLength), internalModuleSourceDigest(id));
     maybeAddCodeCoverage(vm, source);
 
     UnlinkedFunctionExecutable* executable = nullptr;
@@ -258,7 +315,8 @@ static bool encodeInternalModule(const String& text, const String& moduleName, c
     JSC::VM& vm = Zig::vmForBytecodeCache();
     JSC::JSLockHolder locker(vm);
     Zig::ensureBuiltinNamesForBytecodeCache(vm);
-    SourceCode source = makeInternalModuleSource(text, moduleName, url);
+    // This VM only generates bytecode, and the text may be another executable's, so its provider carries no digest.
+    SourceCode source = makeInternalModuleSource(text, moduleName, url, std::nullopt);
     UnlinkedFunctionExecutable* executable = createInternalModuleExecutable(vm, source, moduleName);
     ParserError error;
     JSC::recursivelyGenerateUnlinkedCodeBlocksForFunction(vm, executable, source, error, depth);

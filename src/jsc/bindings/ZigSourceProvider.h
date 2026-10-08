@@ -38,6 +38,7 @@ public:
     ~SourceProvider();
     unsigned hash() const override;
     StringView source() const override;
+    std::optional<std::array<uint8_t, 32>> jitCacheSourceDigest() const final { return m_jitCacheSourceDigest; }
 
     RefPtr<JSC::CachedBytecode> cachedBytecode() const final
     {
@@ -61,7 +62,17 @@ private:
         , m_alreadyBundled(resolvedSource.already_bundled)
         , m_bunVM(bunVM)
         , m_source(WTF::move(sourceImpl))
+        , m_jitCacheSourceDigest(copyJITCacheSourceDigest(resolvedSource.jitcache_source_digest))
     {
+    }
+
+    static std::optional<std::array<uint8_t, 32>> copyJITCacheSourceDigest(const uint8_t* digest)
+    {
+        if (!digest)
+            return std::nullopt;
+        std::array<uint8_t, 32> copy;
+        std::copy_n(digest, copy.size(), copy.begin());
+        return copy;
     }
 
     // Stored directly (not via the creating global) so the destructor stays
@@ -70,6 +81,9 @@ private:
     RefPtr<JSC::CachedBytecode> m_cachedBytecode;
     Ref<WTF::StringImpl> m_source;
     unsigned m_hash = 0;
+    // `bun build --compile`: the digest the executable recorded for m_source, which JITCache keys the module with
+    // instead of reading the text (JSC::SourceProvider::jitCacheSourceDigest).
+    const std::optional<std::array<uint8_t, 32>> m_jitCacheSourceDigest;
 };
 
 } // namespace Zig

@@ -629,6 +629,9 @@ pub struct File {
     pub bytecode_origin_path: &'static [u8],
     /// `WTF::StringImpl::hash()` of `contents`, computed at build time (0 = not recorded).
     pub source_hash: u32,
+    /// JITCache's source digest of the text `to_wtf_string` returns, computed at build time and kept in the section
+    /// (`Flags::HAS_JITCACHE_SOURCE_DIGESTS`); the module's `Zig::SourceProvider` returns it. None = not recorded.
+    pub jitcache_source_digest: Option<&'static [u8; JITCACHE_SOURCE_DIGEST_SIZE]>,
     pub module_format: ModuleFormat,
     pub side: FileSide,
 }
@@ -856,20 +859,60 @@ bitflags::bitflags! {
         /// Built with `--compile --bytecode --target=<a different os/arch/libc than the bun that built it>`: the embedded
         /// bytecode was written by another platform's JavaScriptCore. Reported with crash reports.
         const CROSS_COMPILED_BYTECODE       = 1 << 10;
-        // _padding: u21
+        /// After the module-info string-table pointer: `[[u8; 32]; modules]`, each file's JITCache source digest
+        /// (`jitcache_source_digest`; 32 zero bytes = none), so JITCache keys a module without reading its text.
+        const HAS_JITCACHE_SOURCE_DIGESTS   = 1 << 11;
+        // _padding: u20
     }
 }
 
 const TRAILER: &[u8] = b"\n---- Bun! ----\n";
 
+/// A SHA-256 digest, the size of each `Flags::HAS_JITCACHE_SOURCE_DIGESTS` entry.
+pub const JITCACHE_SOURCE_DIGEST_SIZE: usize = 32;
+
 unsafe extern "C" {
     fn Bun__WTFStringHashLatin1(ptr: *const u8, len: usize) -> u32;
     fn Bun__WTFStringHashUTF16(ptr: *const u16, len: usize) -> u32;
+    fn Bun__JITCacheSourceDigestLatin1(ptr: *const u8, len: usize, out: *mut u8);
+    fn Bun__JITCacheSourceDigestUTF16(ptr: *const u16, len: usize, out: *mut u8);
 }
 /// `WTF::StringImpl::hash()` for an 8-bit string with these bytes.
 fn wtf_latin1_string_hash(bytes: &[u8]) -> u32 {
     // SAFETY: reads `len` bytes from `ptr`; pure function.
     unsafe { Bun__WTFStringHashLatin1(bytes.as_ptr(), bytes.len()) }
+}
+
+/// JITCache's source digest of a body `encode_text_module` wrote: SHA-256 of `u8 encoding`, then the code units as
+/// Latin-1 bytes when every unit is at most 0xFF and as UTF-16LE otherwise. That body is the text the module's
+/// provider holds, since `File::to_wtf_string` wraps it without copying.
+fn jitcache_source_digest(body: &[u8], encoding: Encoding) -> [u8; JITCACHE_SOURCE_DIGEST_SIZE] {
+    let mut digest = [0u8; JITCACHE_SOURCE_DIGEST_SIZE];
+    match encoding {
+        Encoding::Latin1 => {
+            // SAFETY: reads `body.len()` bytes and writes 32 bytes to `digest`; pure function.
+            unsafe {
+                Bun__JITCacheSourceDigestLatin1(body.as_ptr(), body.len(), digest.as_mut_ptr())
+            }
+        }
+        Encoding::Utf16 => {
+            debug_assert!(body.as_ptr().addr().is_multiple_of(align_of::<u16>()));
+            #[expect(
+                clippy::cast_ptr_alignment,
+                reason = "`encode_text_module` writes UTF-16 at an even offset of the section buffer"
+            )]
+            // SAFETY: `body` holds `body.len() / 2` UTF-16 units at a 2-byte-aligned address; writes 32 bytes.
+            unsafe {
+                Bun__JITCacheSourceDigestUTF16(
+                    body.as_ptr().cast::<u16>(),
+                    body.len() / 2,
+                    digest.as_mut_ptr(),
+                )
+            }
+        }
+        Encoding::Binary => unreachable!("a module stored as a string is Latin-1 or UTF-16"),
+    }
+    digest
 }
 
 impl StandaloneModuleGraph {
@@ -994,6 +1037,7 @@ impl StandaloneModuleGraph {
                     offset: read_u32(record_at),
                     length: read_u32(record_at + 4),
                 };
+                record_at += 2 * size_of::<u32>();
                 if (ptr.offset as usize).saturating_add(ptr.length as usize) > raw_len {
                     &[]
                 } else {
@@ -1001,6 +1045,29 @@ impl StandaloneModuleGraph {
                     // the writable regions.
                     unsafe { slice_to(raw_const, raw_len, ptr) }
                 }
+            } else {
+                &[]
+            };
+
+        // A graph written without the record loads as before: its modules carry no digest, and JITCache computes one
+        // from the text when it needs it.
+        let jitcache_source_digests: &'static [[u8; JITCACHE_SOURCE_DIGEST_SIZE]] =
+            if offsets.flags.contains(Flags::HAS_JITCACHE_SOURCE_DIGESTS)
+                && record_at + modules_list_count * JITCACHE_SOURCE_DIGEST_SIZE <= raw_len
+            {
+                // SAFETY: bounds checked above; read-only subrange `to_bytes` chained after the module-info
+                // string-table pointer, disjoint from the writable regions.
+                let digests = unsafe {
+                    slice_to(
+                        raw_const,
+                        raw_len,
+                        StringPointer {
+                            offset: record_at as u32,
+                            length: (modules_list_count * JITCACHE_SOURCE_DIGEST_SIZE) as u32,
+                        },
+                    )
+                };
+                digests.as_chunks().0
             } else {
                 &[]
             };
@@ -1067,6 +1134,9 @@ impl StandaloneModuleGraph {
                     source_hash: source_hashes.map_or(0, |h| {
                         u32::from_le_bytes(h[i * 4..i * 4 + 4].try_into().expect("4 bytes"))
                     }),
+                    jitcache_source_digest: jitcache_source_digests
+                        .get(i)
+                        .filter(|digest| digest.iter().any(|&byte| byte != 0)),
                     module_format: module.module_format,
                     side: module.side,
                     cached_blob: std::sync::OnceLock::new(),
@@ -1300,8 +1370,11 @@ pub(crate) fn to_bytes(
         return Ok(Vec::new());
     }
 
-    string_builder.cap +=
-        (size_of::<CompiledModuleGraphFile>() + size_of::<u32>()) * output_files.len();
+    // Per module: its table record, its source hash and its JITCache source digest.
+    string_builder.cap += (size_of::<CompiledModuleGraphFile>()
+        + size_of::<u32>()
+        + JITCACHE_SOURCE_DIGEST_SIZE)
+        * output_files.len();
     string_builder.cap += TRAILER.len();
     string_builder.cap += 16 + 2 * size_of::<u32>();
     string_builder.cap += size_of::<Offsets>();
@@ -1512,9 +1585,12 @@ pub(crate) fn to_bytes(
     }
 
     let mut source_hashes: Vec<u8> = Vec::with_capacity(modules.len() * size_of::<u32>());
+    let mut jitcache_source_digests: Vec<u8> =
+        Vec::with_capacity(modules.len() * JITCACHE_SOURCE_DIGEST_SIZE);
     for (module, output_file) in modules.iter_mut().zip(&module_files) {
         let mut hash = 0u32;
-        if is_stored_as_string(output_file) {
+        let stored_as_string = is_stored_as_string(output_file);
+        if stored_as_string {
             (module.contents, module.encoding, hash) =
                 encode_text_module(&mut string_builder, output_file.value.as_slice());
         } else {
@@ -1525,6 +1601,15 @@ pub(crate) fn to_bytes(
             hash = 0;
         }
         source_hashes.extend_from_slice(&hash.to_le_bytes());
+        // `Flags::HAS_JITCACHE_SOURCE_DIGESTS`: likewise for JITCache's key, which reads the digest instead of the text.
+        let digest = if stored_as_string && output_file.loader.is_javascript_like() {
+            let body = &string_builder.written_slice()[module.contents.offset as usize..]
+                [..module.contents.length as usize];
+            jitcache_source_digest(body, module.encoding)
+        } else {
+            [0u8; JITCACHE_SOURCE_DIGEST_SIZE]
+        };
+        jitcache_source_digests.extend_from_slice(&digest);
     }
 
     for (module, output_file) in modules.iter_mut().zip(&module_files) {
@@ -1577,6 +1662,8 @@ pub(crate) fn to_bytes(
         let _ = string_builder.append_count(&record);
         flags |= Flags::HAS_MODULE_INFO_STRING_TABLE;
     }
+    let _ = string_builder.append_count(&jitcache_source_digests);
+    flags |= Flags::HAS_JITCACHE_SOURCE_DIGESTS;
     if !target.is_host_platform()
         && output_files
             .iter()

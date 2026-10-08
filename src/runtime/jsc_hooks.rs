@@ -3798,6 +3798,8 @@ export default db;
             },
             bytecode_cache: Bytecode::persistent(bytecode),
             source_code_hash: file.source_hash,
+            // With or without bytecode: JITCache keys the module by this digest instead of reading `source_code`.
+            jitcache_source_digest: file.jitcache_source_digest,
             module_info: if !module_info.is_empty() {
                 let decoded = bun_bundler::analyze_transpiled_module::ModuleInfoSlotTable::parse(
                     module_info_strings,

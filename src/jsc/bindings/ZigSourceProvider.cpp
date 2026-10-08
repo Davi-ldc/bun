@@ -10,7 +10,10 @@
 #include "wtf/Assertions.h"
 
 #include <JavaScriptCore/Completion.h>
+#include <bit>
+#include <openssl/sha.h>
 #include <wtf/Scope.h>
+#include <wtf/text/ASCIIFastPath.h>
 #include <wtf/text/StringHash.h>
 #include <sys/stat.h>
 #include <JavaScriptCore/SourceCodeKey.h>
@@ -335,4 +338,47 @@ extern "C" uint32_t Bun__WTFStringHashLatin1(const Latin1Character* characters, 
 extern "C" uint32_t Bun__WTFStringHashUTF16(const char16_t* characters, size_t length)
 {
     return StringHasher::computeHashAndMaskTop8Bits(std::span { characters, length });
+}
+
+// What JITCache's source digest is for a string with these code units: SHA-256 of `u8 encoding`, then the units as
+// Latin-1 bytes (encoding 1) when every unit is at most 0xFF, else as UTF-16LE (encoding 2), so an 8-bit and a 16-bit
+// string with the same characters digest alike. `bun build --compile` records it per module, and the module's
+// Zig::SourceProvider returns it from jitCacheSourceDigest() so JITCache never reads the text to key it.
+static void computeJITCacheSourceDigest(StringView text, uint8_t* out)
+{
+    static_assert(std::endian::native == std::endian::little, "encoding 2 hashes char16_t storage as UTF-16LE");
+    SHA256_CTX context;
+    SHA256_Init(&context);
+    auto update = [&](std::span<const uint8_t> bytes) {
+        SHA256_Update(&context, bytes.data(), bytes.size());
+    };
+    bool isLatin1 = text.is8Bit() || WTF::charactersAreAllLatin1(text.span16());
+    const uint8_t encoding = isLatin1 ? 1 : 2;
+    update(singleElementSpan(encoding));
+    if (text.is8Bit())
+        update(asBytes(text.span8()));
+    else if (!isLatin1)
+        update(asBytes(text.span16()));
+    else {
+        // Narrowed in chunks, so no copy of the whole text is made.
+        std::array<Latin1Character, 4096> narrowed;
+        for (auto units = text.span16(); !units.empty();) {
+            size_t count = std::min(units.size(), narrowed.size());
+            for (size_t i = 0; i < count; ++i)
+                narrowed[i] = static_cast<Latin1Character>(units[i]);
+            update(asBytes(std::span { narrowed }.first(count)));
+            units = units.subspan(count);
+        }
+    }
+    SHA256_Final(out, &context);
+}
+
+extern "C" void Bun__JITCacheSourceDigestLatin1(const Latin1Character* characters, size_t length, uint8_t* out)
+{
+    computeJITCacheSourceDigest(StringView { std::span { characters, length } }, out);
+}
+
+extern "C" void Bun__JITCacheSourceDigestUTF16(const char16_t* characters, size_t length, uint8_t* out)
+{
+    computeJITCacheSourceDigest(StringView { std::span { characters, length } }, out);
 }

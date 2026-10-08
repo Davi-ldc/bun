@@ -40,6 +40,10 @@ pub struct ResolvedSource {
     /// The file path whose `file://` URL is this module's source origin (what `import()` resolves against and what a
     /// bytecode cache is validated against). Empty: derived from `source_url` (a builtin gets a `builtin://` origin).
     pub origin_path: BunString,
+    /// `bun build --compile`: the JITCache source digest of `source_code`, 32 bytes in the executable's section, recorded
+    /// at build time (`Flags::HAS_JITCACHE_SOURCE_DIGESTS`). `Zig::SourceProvider` copies it and vouches for it as it
+    /// does for `source_code_hash`. None: not recorded.
+    pub jitcache_source_digest: Option<&'static [u8; 32]>,
 }
 
 /// `ResolvedSource.bytecode_cache`: C++ sees `{ uint8_t* ptr; size_t len; bool owned; }`.
@@ -117,4 +121,4 @@ extern "C" fn ResolvedSource__freeBytecode(bytecode: *mut u8) {
     unsafe { bun_alloc::default_alloc::free(bytecode.cast()) };
 }
 
-bun_core::assert_ffi_layout!(ResolvedSource, 136, 8);
+bun_core::assert_ffi_layout!(ResolvedSource, 144, 8; jitcache_source_digest @ 136);
