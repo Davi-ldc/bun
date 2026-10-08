@@ -272,7 +272,9 @@ export const webkit: Dependency = {
       const icuRoot = process.env.BUN_ANDROID_ICU_ROOT ?? "/tmp/icu-android";
       optFlags.push(`--target=${cfg.crossTarget!}`, `--sysroot=${cfg.sysroot!}`, `-isystem`, join(icuRoot, "include"));
     }
-    if (cfg.freebsd && cfg.crossTarget !== undefined) {
+    // FreeBSD and linux-gnu/musl sysroot builds: the same --target/--sysroot that
+    // globalFlags gives every other dep, which CMAKE_C_FLAGS below replaces.
+    if ((cfg.freebsd || (cfg.linux && cfg.abi !== "android")) && cfg.crossTarget !== undefined) {
       optFlags.push(`--target=${cfg.crossTarget}`, `--sysroot=${cfg.sysroot!}`);
     }
     const optFlagStr = optFlags.join(" ");
@@ -313,6 +315,20 @@ export const webkit: Dependency = {
             CMAKE_SYSTEM_NAME: "FreeBSD",
             CMAKE_SYSTEM_PROCESSOR: cfg.arm64 ? "aarch64" : "x86_64",
             CMAKE_SYSROOT: cfg.sysroot!,
+            CMAKE_FIND_ROOT_PATH_MODE_PACKAGE: "BOTH",
+            CMAKE_FIND_ROOT_PATH_MODE_LIBRARY: "BOTH",
+            CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "BOTH",
+          }
+        : {}),
+      // WebKit picks its CPU (WTF_CPU_*) from CMAKE_SYSTEM_PROCESSOR, and ICU comes from the
+      // sysroot. Programs stay on the host: Linux sysroots are unpacked from a distribution
+      // rootfs (ubuntu:20.04, alpine) whose usr/bin holds target binaries such as perl.
+      ...(cfg.linux && cfg.abi !== "android" && cfg.crossTarget !== undefined
+        ? {
+            CMAKE_SYSTEM_NAME: "Linux",
+            CMAKE_SYSTEM_PROCESSOR: cfg.arm64 ? "aarch64" : "x86_64",
+            CMAKE_SYSROOT: cfg.sysroot!,
+            CMAKE_FIND_ROOT_PATH_MODE_PROGRAM: "NEVER",
             CMAKE_FIND_ROOT_PATH_MODE_PACKAGE: "BOTH",
             CMAKE_FIND_ROOT_PATH_MODE_LIBRARY: "BOTH",
             CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "BOTH",
