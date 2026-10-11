@@ -213,6 +213,8 @@ pub mod add_completions;
 pub mod colon_list_type;
 #[path = "discord_command.rs"]
 pub(crate) mod discord_command;
+#[path = "jitcache_command.rs"]
+pub(crate) mod jitcache_command;
 #[path = "shell_completions.rs"]
 pub mod shell_completions;
 #[path = "which_npm_client.rs"]
@@ -670,6 +672,10 @@ pub mod help_command {
   <b><cyan>create<r>    <d>{:<16}<r>     Create a new project from a template <d>(bun c)<r>
   <b><cyan>upgrade<r>                        Upgrade to latest version of Bun.
 
+  <b><blue>jitcache<r>  <d>clean [\\<path\\>]<r>       Remove a JITCache artifact's abandoned temporaries
+            <d>compact \\<ratio\\> [\\<path\\>] [--yes|--no]<r>
+                                 Clean, then evict the bodies that save the least warm-up per byte
+
   <d>\\<command\\><r> <b><cyan>--help<r>               Print help text for command.
 "),
                 $($extra,)*
@@ -964,6 +970,9 @@ pub mod command {
         }
         if x == RootCommandMatcher::case(b"discord") {
             return Tag::DiscordCommand;
+        }
+        if x == RootCommandMatcher::case(b"jitcache") {
+            return Tag::JITCacheCommand;
         }
         if x == RootCommandMatcher::case(b"upgrade") {
             return Tag::UpgradeCommand;
@@ -1317,6 +1326,7 @@ pub mod command {
             Tag::UpgradeCommand => exec_upgrade(log),
             Tag::ExecCommand => exec_exec(log),
             Tag::FuzzilliCommand => exec_fuzzilli(log),
+            Tag::JITCacheCommand => super::jitcache_command::JITCacheCommand::exec(),
         }
     }
 
@@ -2246,6 +2256,22 @@ Full documentation is available at <magenta>https://bun.com/docs/cli/why<r>
             }
             Tag::DiscordCommand => {
                 pretty!("<b>Usage<r>: <b><green>bun discord<r>\n  Open Bun's Discord server.\n");
+                Output::flush();
+            }
+            Tag::JITCacheCommand => {
+                pretty!(
+                    "\
+<b>Usage<r>: <b><green>bun jitcache<r> <blue>clean<r> <d>[\\<path\\>]<r>
+       <b><green>bun jitcache<r> <blue>compact<r> <d>\\<ratio\\> [\\<path\\>]<r> <cyan>[--yes|--no]<r>
+  Maintain a JITCache artifact, ./.jitcache without a path.
+
+<b>Commands:<r>
+  <blue>clean<r>      Remove the temporaries an interrupted producer left
+  <blue>compact<r>    Clean, then evict the bodies that save the least warm-up per byte until the
+             evicted bytes reach \\<ratio\\>, between 0 and 1, of the artifact's bytes. Evicting
+             every body deletes the artifact and asks first; --yes and --no answer for it.
+"
+                );
                 Output::flush();
             }
             Tag::InstallCompletionsCommand => {

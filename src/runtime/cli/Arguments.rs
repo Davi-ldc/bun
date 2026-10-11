@@ -17,7 +17,9 @@ use bun_core::{self, FeatureFlags, Global, Output, env_var};
 use bun_jsc::RegularExpression;
 use bun_jsc::regular_expression::Flags as RegexFlags;
 use bun_options_types::code_coverage_options::Reporters as CoverageReporters;
-use bun_options_types::context::{Debugger, DebuggerEnable, HotReload, MacroOptions, Shard};
+use bun_options_types::context::{
+    Debugger, DebuggerEnable, HotReload, JITCacheFlags, JITCacheText, MacroOptions, Shard,
+};
 use bun_options_types::schema::api;
 use bun_paths::resolve_path;
 use bun_paths::{PathBuffer, platform};
@@ -141,6 +143,9 @@ const TRANSPILER_PARAMS_: &[ParamType] = &[
     ),
 ];
 
+// `jitcache_twins` is declared only by the rustflags of scripts/build/rust.ts, so a plain `cargo check`, `clippy` or
+// rust-analyzer run would report its uses below as unexpected cfgs, which the workspace's lints deny.
+#[allow(unexpected_cfgs)]
 const RUNTIME_PARAMS_: &[ParamType] = &[
     parse_param!(
         "--watch                           Automatically restart the process on file change"
@@ -293,6 +298,30 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     ),
     parse_param!("--cron-title <STR>               Title for cron execution mode"),
     parse_param!("--cron-period <STR>              Cron period for cron execution mode"),
+    // JITCache (SPEC-integrator.md section 11.2): the jsc shell's flags with the same syntax, except the shell's
+    // --jitcache-delta-at-exit, --jitcache-maintenance, --jitcache-log and --jitcache-max-memory.
+    parse_param!(
+        "--jitcache <STR>?                 Run with JITCache over the artifact at the given path (./.jitcache by default)"
+    ),
+    parse_param!(
+        "--jitcache-mode <STR>             JITCache's role: c (consumer, the default), p (producer) or p-c (consumer-producer)"
+    ),
+    parse_param!(
+        "--jitcache-strict <STR>?          Validate the full structure of what JITCache reads: bare or 1 turns it on, 0 off"
+    ),
+    parse_param!(
+        "--jitcache-bench-report <STR>     Append JITCache's bench report to the given path"
+    ),
+    // The four flags of JITCache's test builds that Bun takes (SPEC-integrator.harness.md section 5.1), declared only in
+    // those builds, which scripts/build/rust.ts gives cfg(jitcache_twins), and hidden from --help: no help text.
+    #[cfg(jitcache_twins)]
+    parse_param!("--jitcache-twins-report <STR>"),
+    #[cfg(jitcache_twins)]
+    parse_param!("--jitcache-twins-record-layout <STR>"),
+    #[cfg(jitcache_twins)]
+    parse_param!("--jitcache-twins-avoid-layout <STR>"),
+    #[cfg(jitcache_twins)]
+    parse_param!("--jitcache-body-events <STR>"),
     // Node.js trace/diagnostics flags. Intentionally no help text: params with
     // an empty description are hidden from `--help` (see `simple_help`).
     // Declaring them (vs. relying on unknown-flag skipping) matters for the
@@ -760,6 +789,114 @@ static Bun__Node__CAStore: core::sync::atomic::AtomicU8 =
 #[unsafe(no_mangle)]
 pub(crate) static Bun__Node__UseSystemCA: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+
+// ─── JITCache's flags ────────────────────────────────────────────────────────
+
+/// The flags `parse` read, for `JITCacheHost.cpp`, which reads them on each VM's thread once startup is over. A process
+/// whose command line `parse` never read, such as one that only runs `bun build`'s macros, gets JITCache off.
+#[unsafe(no_mangle)]
+pub extern "C" fn Bun__JITCache__flags() -> *const JITCacheFlags {
+    static OFF: JITCacheFlags = JITCacheFlags::OFF;
+    match bun_options_types::context::try_get() {
+        Some(ctx) => &ctx.runtime_options.jitcache,
+        None => &OFF,
+    }
+}
+
+/// `JSC::JITCache::defaultArtifactPath`: the artifact of a bare `--jitcache`.
+const JITCACHE_DEFAULT_ARTIFACT_PATH: &[u8] = b"./.jitcache";
+
+#[cold]
+fn invalid_jitcache_flag(flag: &str, value: &[u8], expected: &str) -> ! {
+    Output::err_generic(
+        "Invalid value for {}\n",
+        format_args!("{}: \"{}\". {}", flag, BStr::new(value), expected),
+    );
+    Global::exit(1);
+}
+
+/// JITCache's flags (SPEC-integrator.md section 11.2), read once per process with the other runtime flags; a
+/// malformed value is a command-line error, and the last occurrence of a flag wins. Every path is resolved against the
+/// working directory after `--cwd`: each VM `JITCacheHost::configureVM` configures reads these flags, and a relative
+/// path would follow a `process.chdir` made before a worker starts.
+// Plain cargo runs do not declare `jitcache_twins` (see `RUNTIME_PARAMS_`).
+#[allow(unexpected_cfgs)]
+fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFlags {
+    let resolve = |path: &[u8]| -> Box<[u8]> {
+        let mut spill = Vec::new();
+        Box::from(resolve_path::join_abs_string_spill::<platform::Auto>(
+            cwd,
+            &mut spill,
+            &[path],
+        ))
+    };
+    // A path flag takes a non-empty path.
+    let path_flag = |flag: &'static str| -> JITCacheText {
+        let Some(path) = args.option(flag.as_bytes()) else {
+            return JITCacheText::EMPTY;
+        };
+        if path.is_empty() {
+            invalid_jitcache_flag(flag, path, "Expected a path");
+        }
+        JITCacheText::leak(resolve(path))
+    };
+
+    let mut flags = JITCacheFlags::OFF;
+    if let Some(path) = args.option(b"--jitcache") {
+        let path = if path.is_empty() {
+            JITCACHE_DEFAULT_ARTIFACT_PATH
+        } else {
+            path
+        };
+        flags.artifact_path = JITCacheText::leak(resolve(path));
+    }
+    if let Some(mode) = args.option(b"--jitcache-mode") {
+        flags.role = match mode {
+            b"c" => 1,
+            b"p" => 2,
+            b"p-c" => 3,
+            _ => invalid_jitcache_flag("--jitcache-mode", mode, "Must be c, p or p-c"),
+        };
+    }
+    if let Some(strict) = args.option(b"--jitcache-strict") {
+        flags.strict = match strict {
+            b"" | b"1" => true,
+            b"0" => false,
+            _ => invalid_jitcache_flag("--jitcache-strict", strict, "Must be 0 or 1"),
+        };
+    }
+    flags.bench_report_path = path_flag("--jitcache-bench-report");
+    // Only twins builds declare the four flags of the harness sub-SPEC's section 5.1, so only they read them; every other
+    // build leaves their fields empty, in the one layout JITCacheFlags has.
+    #[cfg(jitcache_twins)]
+    {
+        flags.twins_report_path = path_flag("--jitcache-twins-report");
+        flags.twins_record_layout_path = path_flag("--jitcache-twins-record-layout");
+        flags.body_events_path = path_flag("--jitcache-body-events");
+        // An empty value is an empty list, which the first run of a runner's sequence gets; an empty path inside a list
+        // is malformed.
+        if let Some(list) = args.option(b"--jitcache-twins-avoid-layout") {
+            if !list.is_empty() {
+                let mut joined: Vec<u8> = Vec::with_capacity(list.len());
+                for path in list.split(|byte| *byte == b',') {
+                    if path.is_empty() {
+                        invalid_jitcache_flag(
+                            "--jitcache-twins-avoid-layout",
+                            list,
+                            "Expected paths separated by commas",
+                        );
+                    }
+                    if !joined.is_empty() {
+                        joined.push(b',');
+                    }
+                    joined.extend_from_slice(&resolve(path));
+                }
+                flags.twins_avoid_layout_paths = JITCacheText::leak(joined.into_boxed_slice());
+            }
+        }
+    }
+    flags
+}
 
 // ─── bunfig loading ──────────────────────────────────────────────────────────
 // their private helpers moved to `bun_bunfig::arguments` so `bun_install` can
@@ -1303,6 +1440,9 @@ pub(crate) fn parse(cmd: CommandTag, ctx: Context<'_>) -> crate::Result<api::Tra
                 })
             };
         }
+
+        ctx.runtime_options.jitcache =
+            parse_jitcache_flags(&args, ctx.args.absolute_working_dir.as_deref().unwrap());
 
         let cpu_prof_flag = args.flag(b"--cpu-prof");
         let cpu_prof_md_flag = args.flag(b"--cpu-prof-md");

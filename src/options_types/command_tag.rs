@@ -45,6 +45,8 @@ pub enum Tag {
     DedupeCommand,
     PruneCommand,
     FuzzilliCommand,
+    /// `bun jitcache`: JITCache's maintenance command line, `clean` and `compact`.
+    JITCacheCommand,
 }
 
 impl Tag {
@@ -87,6 +89,7 @@ impl Tag {
             Tag::DedupeCommand => b'd',
             Tag::PruneCommand => b'N',
             Tag::FuzzilliCommand => b'F',
+            Tag::JITCacheCommand => b'J',
         }
     }
 
@@ -172,6 +175,7 @@ impl Tag {
         Self::DedupeCommand,
         Self::PruneCommand,
         Self::FuzzilliCommand,
+        Self::JITCacheCommand,
     ];
 
     // Heavy methods that pull in `Arguments` / help text live in the CLI crate.

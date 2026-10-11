@@ -22,6 +22,7 @@
 #include <JavaScriptCore/ErrorInstance.h>
 #include <JavaScriptCore/HeapSnapshotBuilder.h>
 #include <JavaScriptCore/JIT.h>
+#include <JavaScriptCore/JITCacheTwinsHost.h>
 #include <JavaScriptCore/JSBasePrivate.h>
 #include <JavaScriptCore/JSCInlines.h>
 #include <JavaScriptCore/JSONObject.h>
@@ -975,7 +976,13 @@ JSC_DEFINE_HOST_FUNCTION(functionPercentAvailableMemoryInUse, (JSGlobalObject * 
 namespace Zig {
 DEFINE_NATIVE_MODULE(BunJSC)
 {
-    INIT_NATIVE_MODULE(BunJSC, 36);
+#if ENABLE(JITCACHE_TWINS)
+    // JITCache's test builds export five more functions (SPEC-integrator.harness.md section 5.3).
+    constexpr int jitCacheExports = 5;
+#else
+    constexpr int jitCacheExports = 0;
+#endif
+    INIT_NATIVE_MODULE(BunJSC, 36 + jitCacheExports);
 
     putNativeFn(Identifier::fromString(vm, "callerSourceOrigin"_s), functionCallerSourceOrigin);
     putNativeFn(Identifier::fromString(vm, "jscDescribe"_s), functionDescribe);
@@ -1010,6 +1017,15 @@ DEFINE_NATIVE_MODULE(BunJSC)
     putNativeFn(Identifier::fromString(vm, "deserialize"_s), functionDeserialize);
     putNativeFn(Identifier::fromString(vm, "estimateShallowMemoryUsageOf"_s), functionEstimateDirectMemoryUsageOf);
     putNativeFn(Identifier::fromString(vm, "percentAvailableMemoryInUse"_s), functionPercentAvailableMemoryInUse);
+#if ENABLE(JITCACHE_TWINS)
+    // The host functions the jsc shell registers under the same names; jitcacheUCBStatistics returns what
+    // $vm.jitCacheUCBStatistics() does.
+    putNativeFn(Identifier::fromString(vm, "jitcacheStatus"_s), JSC::JITCache::functionJITCacheStatus);
+    putNativeFn(Identifier::fromString(vm, "jitcacheProgress"_s), JSC::JITCache::functionJITCacheProgress);
+    putNativeFn(Identifier::fromString(vm, "jitcacheUCBStatistics"_s), JSC::JITCache::functionJITCacheUCBStatistics);
+    putNativeFn(Identifier::fromString(vm, "jitcacheDescribeHeap"_s), JSC::JITCache::functionJITCacheDescribeHeap);
+    putNativeFn(Identifier::fromString(vm, "jitcacheBodyEvents"_s), JSC::JITCache::functionJITCacheBodyEvents);
+#endif
 
     // Deprecated
     putNativeFn(Identifier::fromString(vm, "describe"_s), functionDescribe);

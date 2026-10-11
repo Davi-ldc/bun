@@ -3,6 +3,7 @@
 #include "ZigGlobalObject.h"
 #include "BuiltinModuleKeys.h"
 #include "IsolatedModuleCache.h"
+#include "JITCacheHost.h"
 #include "MessagePort.h"
 #include "helpers.h"
 #include "JavaScriptCore/ArgList.h"
@@ -293,6 +294,11 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
         std::set_terminate([]() { Zig__GlobalObject__onCrash(); });
         WTF::initializeMainThread();
 
+#if ENABLE(JITCACHE_TWINS)
+        // JITCache's test builds settle where JSC::initialize reserves the executable pool and the structure heap.
+        Bun::JITCacheHost::willInitializeJSC();
+#endif
+
         // Use JSC::initialize with a callback to set Options during initialization.
         // The callback runs BEFORE IPInt::initialize() so we can configure WASM options early.
         // Under ASAN+Linux, JSC's notifyOptionsChanged() already disables
@@ -378,6 +384,10 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
             JSC::Options::assertOptionsAreCoherent();
         }); // end JSC::initialize lambda
 
+#if ENABLE(JITCACHE_TWINS)
+        Bun::JITCacheHost::didInitializeJSC();
+#endif
+
 #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
         // JSC::initialize() registered unwind info + a language-specific SEH
         // handler for the JIT pool. Route that handler to the crash reporter
@@ -456,9 +466,9 @@ void Zig::GlobalObject::resetOnEachMicrotaskTick()
 
 extern "C" size_t Bun__reported_memory_size;
 
-// executionContextId: -1 for main thread
-// executionContextId: maxInt32 for macros
-// executionContextId: >-1 for workers
+// executionContextId: 1 for the main thread
+// executionContextId: maxInt32 for macros and the debugger thread
+// executionContextId: >1 for workers
 extern "C" bool Bun__hasStandaloneModuleGraph();
 
 extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, int32_t executionContextId, bool miniMode, bool evalMode, void* worker_ptr)
@@ -473,6 +483,9 @@ extern "C" JSC::JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
     // This must happen before JSVMClientData::create
     vm.heap.acquireAccess();
     JSC::JSLockHolder locker(vm);
+
+    // JITCache starts with the API lock and heap access, before anything could create a builtin executable.
+    Bun::JITCacheHost::configureVM(vm, executionContextId);
 
     {
         const char* disable_stop_if_necessary_timer = getenv("BUN_DISABLE_STOP_IF_NECESSARY_TIMER");

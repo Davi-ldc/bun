@@ -463,6 +463,14 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
   if (cfg.socketFaultInjection) {
     rustflags.push("--cfg=socket_fault_injection");
   }
+  // `jitcache_twins`: JITCache's test builds (the debug-local-twins profile), the Rust counterpart of the C++ side's
+  // ENABLE_JITCACHE_TWINS. Only these builds declare the four JITCache flags of the harness sub-SPEC's section 5.1 that
+  // Bun takes (`RUNTIME_PARAMS_` in src/runtime/cli/Arguments.rs), so no other build of Bun has them. Only Bun's Rust
+  // reads the cfg, so the engine's compile and link flags stay as every build has them.
+  rustflags.push("--check-cfg=cfg(jitcache_twins)");
+  if (cfg.jitcacheTwins) {
+    rustflags.push("--cfg=jitcache_twins");
+  }
   // Drop `#[track_caller]` source-location capture in release. Every
   // `Option::unwrap`/`slice[i]`/`RefCell::borrow` etc. otherwise emits a
   // `&'static core::panic::Location` (file/line/col) plus the file-path string

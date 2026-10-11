@@ -571,6 +571,81 @@ pub struct RuntimeOptions {
     pub cron_period: Box<[u8]>,
     pub cpu_prof: CpuProf,
     pub heap_prof: HeapProf,
+    pub jitcache: JITCacheFlags,
+}
+
+/// JITCache's flags (SPEC-integrator.md section 11.2). Every VM `JITCacheHost::configureVM` configures reads them
+/// through `Bun__JITCache__flags` as `Bun::JITCacheFlags` (src/jsc/bindings/JITCacheHost.h), so the layout is C's and
+/// matches that struct field for field.
+#[repr(C)]
+pub struct JITCacheFlags {
+    /// `--jitcache`, resolved against the working directory; empty without the flag, which leaves JITCache off.
+    pub artifact_path: JITCacheText,
+    /// `--jitcache-mode`, as `JSC::JITCache::Role`: 1 consumer, 2 producer, 3 consumer-producer.
+    pub role: u8,
+    /// `--jitcache-strict`.
+    pub strict: bool,
+    /// `--jitcache-bench-report`.
+    pub bench_report_path: JITCacheText,
+    /// The four flags of the harness sub-SPEC's section 5.1 that Bun takes. Only twins builds declare and read them,
+    /// under `cfg(jitcache_twins)`, and act on them, under `ENABLE(JITCACHE_TWINS)`; every other build leaves them empty.
+    /// They stay in every build, so the Rust and C++ layouts agree whatever the two switches say.
+    pub twins_report_path: JITCacheText,
+    pub twins_record_layout_path: JITCacheText,
+    /// `--jitcache-twins-avoid-layout`: the paths joined by `,`; empty for none.
+    pub twins_avoid_layout_paths: JITCacheText,
+    pub body_events_path: JITCacheText,
+}
+
+impl JITCacheFlags {
+    /// No `--jitcache` and no other JITCache flag.
+    pub const OFF: Self = Self {
+        artifact_path: JITCacheText::EMPTY,
+        role: 1,
+        strict: false,
+        bench_report_path: JITCacheText::EMPTY,
+        twins_report_path: JITCacheText::EMPTY,
+        twins_record_layout_path: JITCacheText::EMPTY,
+        twins_avoid_layout_paths: JITCacheText::EMPTY,
+        body_events_path: JITCacheText::EMPTY,
+    };
+}
+
+const _: () = assert!(
+    core::mem::size_of::<JITCacheFlags>()
+        == 6 * core::mem::size_of::<JITCacheText>() + core::mem::size_of::<usize>()
+);
+
+/// A byte string of the JITCache flags as C reads it: `ptr[..len]`, not NUL-terminated, null when empty.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct JITCacheText {
+    ptr: *const u8,
+    len: usize,
+}
+
+// SAFETY: a `JITCacheText` points only into bytes leaked for the process lifetime, which nothing writes again.
+unsafe impl Send for JITCacheText {}
+// SAFETY: as for `Send`.
+unsafe impl Sync for JITCacheText {}
+
+impl JITCacheText {
+    pub const EMPTY: Self = Self {
+        ptr: core::ptr::null(),
+        len: 0,
+    };
+
+    /// Keeps `bytes` for the process lifetime, as every CLI string is kept.
+    pub fn leak(bytes: Box<[u8]>) -> Self {
+        if bytes.is_empty() {
+            return Self::EMPTY;
+        }
+        let bytes: &'static [u8] = Box::leak(bytes);
+        Self {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -638,6 +713,7 @@ impl Default for RuntimeOptions {
             cron_period: Box::default(),
             cpu_prof: CpuProf::default(),
             heap_prof: HeapProf::default(),
+            jitcache: JITCacheFlags::OFF,
         }
     }
 }
