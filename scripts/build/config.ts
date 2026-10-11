@@ -1408,27 +1408,31 @@ function compareVersionStrings(a: string, b: string): number {
  * Find the repository root by walking up from cwd looking for package.json
  * with name "bun". Exported so `resolveToolchain()` in configure.ts can
  * resolve paths correctly when invoked from ninja (where cwd = build dir).
+ * A build dir outside the repository (`--build-dir`) gives ninja's
+ * regeneration a cwd with no such package.json above it, so the walk then
+ * starts again from this script's own directory, which is inside the repo.
  */
 export function findRepoRoot(): string {
-  let dir = process.cwd();
-  while (true) {
-    const pkgPath = join(dir, "package.json");
-    if (existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: string };
-        if (pkg.name === "bun") {
-          return dir;
+  for (const start of [process.cwd(), import.meta.dirname]) {
+    let dir = start;
+    while (true) {
+      const pkgPath = join(dir, "package.json");
+      if (existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: string };
+          if (pkg.name === "bun") {
+            return dir;
+          }
+        } catch {
+          // Invalid JSON, keep walking
         }
-      } catch {
-        // Invalid JSON, keep walking
       }
+      const parent = resolve(dir, "..");
+      if (parent === dir) break;
+      dir = parent;
     }
-    const parent = resolve(dir, "..");
-    if (parent === dir) {
-      throw new BuildError("Could not find bun repository root", { hint: "Run this from within the bun repository" });
-    }
-    dir = parent;
   }
+  throw new BuildError("Could not find bun repository root", { hint: "Run this from within the bun repository" });
 }
 
 /**
