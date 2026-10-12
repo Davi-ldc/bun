@@ -1414,6 +1414,8 @@ void JSCommonJSModule::evaluate(
                 globalObject->m_moduleWrapperEnd);
         }
         source.source_code = Bun::toStringRef(string);
+        // JITCache: the recorded digest describes the text just replaced, so the provider must not vouch for it.
+        source.jitcache_source_digest = nullptr;
     }
 
     auto sourceProvider = Zig::SourceProvider::create(globalObject, source, JSC::SourceProviderSourceType::Program, isBuiltIn);
@@ -1527,6 +1529,8 @@ std::optional<JSC::SourceCode> createCommonJSModule(
                 source.source_code.transferToWTFString(),
                 globalObject->m_moduleWrapperEnd);
             source.source_code = Bun::toStringRef(concat);
+            // JITCache: the recorded digest describes the text just replaced, so the provider must not vouch for it.
+            source.jitcache_source_digest = nullptr;
         }
 
         auto sourceProvider = Zig::SourceProvider::create(globalObject, source, JSC::SourceProviderSourceType::Program, isBuiltIn);
