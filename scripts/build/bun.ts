@@ -277,8 +277,10 @@ export function emitBun(n: Ninja, cfg: Config, sources: Sources): BunOutput {
   const cFlagsFull = [...flags.cflags, ...includeFlags, ...defineFlags];
 
   // ─── Step 4: PCH ───
-  // CI full mode (unused by the pipeline) skips the PCH; cpp-only/archive-link use it.
-  const usePch = !cfg.ci || cfg.mode !== "full";
+  // Every mode uses the PCH. CI full mode used to skip it, but the pipeline never ran that mode, and without the PCH
+  // some sources lose declarations the PCH supplies (node/crypto's JSPrivateKeyObjectPrototype.h calls
+  // Bun::createClassStructure without including BunClientData.h), so JITCache's ci-release builds failed there.
+  const usePch = true;
   let pchOut: { pch: string; wrapperHeader: string } | undefined;
 
   if (usePch) {
