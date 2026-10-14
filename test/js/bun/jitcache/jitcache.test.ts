@@ -7,7 +7,6 @@
 import { describe, expect, test } from "bun:test";
 import { bunEnv, bunExe, isLinux, tempDir } from "harness";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -89,13 +88,50 @@ function startEvents(path: string): { outcome: string; role: string }[] {
   return eventsNamed(path, "start").map(({ outcome, role }) => ({ outcome, role }));
 }
 
-function bodyFiles(artifact: string): string[] {
-  const bodies = join(artifact, "cache", "bodies");
-  if (!existsSync(bodies)) return [];
-  return readdirSync(bodies)
-    .filter(name => /^[0-9a-f]{80}\.bin$/.test(name))
-    .sort()
-    .map(name => join(bodies, name));
+// The bodies cache/pack lists, in key order: its current root is the root slot (at 64 and 128) with the higher
+// generation, and its index the full index that root's chain of index blocks ends at, followed by the deltas in order.
+// Each body is its record's offset plus the 64-byte record header, and its size.
+interface PackedBody {
+  key: string;
+  start: number;
+  size: number;
+}
+function packBodies(artifact: string): PackedBody[] {
+  const path = join(artifact, "cache", "pack");
+  if (!existsSync(path)) return [];
+  const bytes = readFileSync(path);
+  const view = dataView(bytes);
+  expect(bytes.subarray(0, 8).toString("latin1")).toBe("JITCPACK");
+  const u64 = (offset: number) => Number(view.getBigUint64(offset, true));
+  const slot = u64(64) > u64(128) ? 64 : 128;
+  const chain: number[] = [];
+  for (let at = u64(slot + 16); ; at = u64(at + 8)) {
+    expect(bytes.subarray(at, at + 8).toString("latin1")).toBe("JITCINDX");
+    chain.push(at);
+    if (view.getUint32(at + 16, true) === 0) break;
+  }
+  const bodies = new Map<string, PackedBody>();
+  for (const at of chain.reverse()) {
+    if (view.getUint32(at + 16, true) === 0) bodies.clear();
+    for (let index = 0; index < view.getUint32(at + 20, true); ++index) {
+      const entry = at + 32 + 80 * index;
+      const key = bytes.subarray(entry, entry + 40).toString("hex");
+      const offset = u64(entry + 40);
+      if (offset) bodies.set(key, { key, start: offset + 64, size: u64(entry + 48) });
+      else bodies.delete(key);
+    }
+  }
+  return [...bodies.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// Rewrites cache/pack in place with fix applied to the bytes of every body it lists.
+function rewritePackedBodies(artifact: string, fix: (body: Buffer) => void) {
+  const path = join(artifact, "cache", "pack");
+  const bodies = packBodies(artifact);
+  expect(bodies.length).toBeGreaterThan(0);
+  const bytes = readFileSync(path);
+  for (const body of bodies) fix(bytes.subarray(body.start, body.start + body.size));
+  writeFileSync(path, bytes);
 }
 
 // A producer of the app, which must start, warn nothing, print what the JITCache-off run prints and commit bodies.
@@ -105,7 +141,7 @@ async function produce(artifact: string, cwd: string, appArgs: string[] = [], fl
   expect(warnings(run.stderr)).toEqual([]);
   expect(run.stdout).toBe(await offOutput(appArgs));
   expect(run.exitCode).toBe(0);
-  expect(bodyFiles(artifact).length).toBeGreaterThan(0);
+  expect(packBodies(artifact).length).toBeGreaterThan(0);
   return run;
 }
 
@@ -229,8 +265,7 @@ function rewriteHeaderAsAnotherBuild(artifact: string): Buffer {
 // directory's and the envelope's CRCs (container sub-SPEC sections 4.1 and 4.2). The body keeps its integrity, which
 // every mode checks, and breaks a rule only strict checks (SPEC-ucb.md section 10.2, SV1); with strict off nothing
 // reads the byte.
-function breakFeedbackRuleOnlyStrictChecks(body: string) {
-  const bytes = readFileSync(body);
+function breakFeedbackRuleOnlyStrictChecks(bytes: Buffer) {
   const view = dataView(bytes);
   expect(bytes.subarray(0, 8).toString("latin1")).toBe("JITCBODY");
   const sectionCount = view.getUint16(12, true);
@@ -254,12 +289,11 @@ function breakFeedbackRuleOnlyStrictChecks(body: string) {
   expect(feedbackSections).toBe(1);
   view.setUint32(96, crc32c(directory), true);
   view.setUint32(120, crc32c(bytes.subarray(0, 120)), true);
-  writeFileSync(body, bytes);
 }
 
-// A temporary as the writer names one (container sub-SPEC section 1.1), as a producer killed mid-commit leaves it.
+// A pack temporary, as a compaction killed before its rename leaves one.
 function addTemporary(artifact: string, bytes: number): string {
-  const path = join(artifact, "cache", ".0123456789abcdef0123456789abcdef.tmp");
+  const path = join(artifact, "cache", ".pack.0123456789abcdef0123456789abcdef.tmp");
   writeFileSync(path, Buffer.alloc(bytes, 7));
   return path;
 }
@@ -337,7 +371,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     // The new artifact is this build's, and the p-c committed into it, which a later c imports.
     expect(readFileSync(join(artifact, "cache", "header"))).toEqual(header);
     expect(existsSync(join(artifact, ".cache.replaced"))).toBe(false);
-    expect(bodyFiles(artifact).length).toBeGreaterThan(0);
+    expect(packBodies(artifact).length).toBeGreaterThan(0);
     await consume(artifact, String(dir), join(String(dir), "consumer.jsonl"));
   });
 
@@ -345,15 +379,16 @@ describe.skipIf(!isLinux)("JITCache", () => {
     using dir = tempDir("jitcache-invalid", {});
     const artifact = join(String(dir), "artifact");
     await produce(artifact, String(dir), ["worker"]);
-    // One byte past the size its envelope records fails every body at container.size, in both modes (container
-    // sub-SPEC section 4.5, B1).
-    for (const body of bodyFiles(artifact)) appendFileSync(body, Buffer.from([0]));
+    // A flipped last byte, which lies in a body's last section, fails every body at its section checksum in both modes.
+    rewritePackedBodies(artifact, body => {
+      body[body.length - 1] ^= 0x5a;
+    });
 
     for (const appArgs of [[], ["worker"]]) {
       const run = await bun([`--jitcache=${artifact}`, "--jitcache-strict", app, ...appArgs], String(dir));
       const lines = warnings(run.stderr);
       expect(lines).toHaveLength(1);
-      expect(lines[0]).toStartWith("warn: JITCache is off: container.size: ");
+      expect(lines[0]).toStartWith("warn: JITCache is off: container.checksum: ");
       expect(run.stdout).toBe(await offOutput(appArgs));
       expect(run.exitCode).toBe(0);
     }
@@ -427,6 +462,15 @@ describe.skipIf(!isLinux)("JITCache", () => {
     const captures = eventsNamed(report, "capture");
     const committed = captures.filter(capture => capture.trigger === "delta" && capture.outcome === "committed");
     expect(committed.length).toBe(deltas[0].committedBodies);
+    // The pack lists every committed key once, its newest version winning. The delta's pack event reports the pack it
+    // left and compacts exactly when the versions it superseded and the index deltas pass half of the pack.
+    const keys = new Set(committed.map(capture => capture.key));
+    const listed = new Set(packBodies(artifact).map(body => body.key));
+    for (const key of keys) expect(listed.has(key)).toBe(true);
+    const packs = eventsNamed(report, "pack");
+    expect(packs).toHaveLength(1);
+    expect(packs[0].bytes).toBe(packs[0].liveBytes + packs[0].deadBytes);
+    expect(packs[0].compacted).toBe(2 * packs[0].deadBytes > packs[0].bytes ? 1 : 0);
   });
 
   test.concurrent("bun jitcache clean and compact: exit codes, --yes, --no and no terminal", async () => {
@@ -439,22 +483,23 @@ describe.skipIf(!isLinux)("JITCache", () => {
     const header = join(artifact, "cache", "header");
 
     const temporary = addTemporary(artifact, 100);
-    const bodies = bodyFiles(artifact).length;
+    const bodies = packBodies(artifact).length;
     const cleaned = await maintenance("clean", artifact);
     expect(summary(cleaned)).toEqual(["clean: done, 1 temporaries removed, 100 bytes reclaimed"]);
     expect(cleaned.exitCode).toBe(0);
     expect(existsSync(temporary)).toBe(false);
-    expect(bodyFiles(artifact).length).toBe(bodies);
+    expect(packBodies(artifact).length).toBe(bodies);
 
     const absent = await maintenance("clean", missing);
     expect(summary(absent)).toEqual(["clean: no-artifact, 0 temporaries removed, 0 bytes reclaimed"]);
     expect(absent.exitCode).toBe(0);
     expect(existsSync(missing)).toBe(false);
 
+    // Ratio 0 evicts nothing; it drops the pack's dead bytes, the index deltas of the commits.
     const onlyCleans = await maintenance("compact", "0", artifact);
-    expect(summary(onlyCleans)).toEqual(["compact: done, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed"]);
+    expect(summary(onlyCleans)[0]).toMatch(/^compact: done, 0 temporaries removed, 0 bodies evicted, \d+ bytes reclaimed$/);
     expect(onlyCleans.exitCode).toBe(0);
-    expect(bodyFiles(artifact).length).toBe(bodies);
+    expect(packBodies(artifact).length).toBe(bodies);
 
     // A plan that deletes the whole artifact waits for confirmation; standard input is no terminal here, so compact
     // prints the plan, asks nothing and changes nothing.
@@ -470,7 +515,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
       "compact: declined, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed",
     ]);
     expect(declined.exitCode).toBe(4);
-    expect(bodyFiles(artifact).length).toBe(bodies);
+    expect(packBodies(artifact).length).toBe(bodies);
     expect(existsSync(header)).toBe(true);
 
     const badRatio = await maintenance("compact", "2", artifact);
@@ -500,14 +545,14 @@ describe.skipIf(!isLinux)("JITCache", () => {
     });
 
     // A tenth of the artifact's bytes takes at least one body and, with weigh and shape among them, not every body, so
-    // the plan applies without confirmation.
-    const before = bodyFiles(artifact).length;
+    // the plan applies without confirmation, as a compaction that keeps the survivors.
+    const before = packBodies(artifact).length;
     const partial = await maintenance("compact", "0.1", artifact);
     expect(partial.exitCode).toBe(0);
     const evictedLine = /^compact: done, 0 temporaries removed, (\d+) bodies evicted, \d+ bytes reclaimed$/m;
     const evicted = Number(evictedLine.exec(partial.stdout)?.[1]);
     expect(evicted).toBeGreaterThan(0);
-    expect(bodyFiles(artifact).length).toBe(before - evicted);
+    expect(packBodies(artifact).length).toBe(before - evicted);
     expect(existsSync(header)).toBe(true);
 
     const deleted = await maintenance("compact", "1", artifact, "--yes");
@@ -521,19 +566,20 @@ describe.skipIf(!isLinux)("JITCache", () => {
     using dir = tempDir("jitcache-terminal", {});
     const artifact = join(String(dir), "artifact");
     await produce(artifact, String(dir));
-    const bodies = bodyFiles(artifact);
+    const bodies = packBodies(artifact);
 
     const declined = await compactOnTerminal(artifact, String(dir), "n\n");
     expect(declined.output).toContain("deletes the whole artifact");
     expect(declined.output).toContain("compact: declined, ");
     expect(declined.exitCode).toBe(4);
-    expect(bodyFiles(artifact)).toEqual(bodies);
+    expect(packBodies(artifact)).toEqual(bodies);
 
-    // A body that goes while compact waits changes the plan, which the confirmed call then refuses to apply.
-    const changed = await compactOnTerminal(artifact, String(dir), "y\n", () => rmSync(bodies[0]));
+    // Bodies that go while compact waits change the plan, which the confirmed call then refuses to apply.
+    const pack = join(artifact, "cache", "pack");
+    const changed = await compactOnTerminal(artifact, String(dir), "y\n", () => rmSync(pack));
     expect(changed.output).toContain("compact: plan-changed, ");
     expect(changed.exitCode).toBe(5);
-    expect(bodyFiles(artifact)).toEqual(bodies.slice(1));
+    expect(existsSync(pack)).toBe(false);
 
     const confirmed = await compactOnTerminal(artifact, String(dir), "y\n");
     expect(confirmed.output).toContain("compact: done, ");
@@ -547,6 +593,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     for (const [flag, value] of [
       ["--jitcache-mode", "x"],
       ["--jitcache-strict", "2"],
+      ["--jitcache-capture", "x"],
       ["--jitcache-bench-report", ""],
     ]) {
       const run = await bun([`--jitcache=${artifact}`, `${flag}=${value}`, app], String(dir));
@@ -607,7 +654,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(cleaned.stdout).toContain("clean: done, 1 temporaries removed, 64 bytes reclaimed");
     expect(cleaned.exitCode).toBe(0);
     const compacted = await bun(["jitcache", "compact", "0"], project);
-    expect(compacted.stdout).toContain("compact: done, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed");
+    expect(compacted.stdout).toMatch(/compact: done, 0 temporaries removed, 0 bodies evicted, \d+ bytes reclaimed/);
     expect(compacted.exitCode).toBe(0);
     expect(existsSync(join(artifact, "cache", "header"))).toBe(true);
 
@@ -622,7 +669,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     using dir = tempDir("jitcache-strict", {});
     const artifact = join(String(dir), "artifact");
     await produce(artifact, String(dir));
-    for (const body of bodyFiles(artifact)) breakFeedbackRuleOnlyStrictChecks(body);
+    rewritePackedBodies(artifact, breakFeedbackRuleOnlyStrictChecks);
 
     const cases: [string[], boolean][] = [
       [["--jitcache-strict"], true],
@@ -647,6 +694,31 @@ describe.skipIf(!isLinux)("JITCache", () => {
       expect(eventsNamed(report, "install")).toEqual([]);
       expect(run.stdout).toBe(await offOutput());
       expect(run.exitCode).toBe(0);
+    }
+  });
+
+  test.concurrent("--jitcache-capture: all, the default, also commits bodies without an image, compiled does not", async () => {
+    using dir = tempDir("jitcache-capture", {});
+    // The app's top level runs once and never compiles, so with all the delta at exit commits it at tier 0 (THREAD
+    // Capture); weigh and shape compile, so every scope commits them with an image.
+    const cases: [string[], boolean][] = [
+      [[], true],
+      [["--jitcache-capture=all"], true],
+      [["--jitcache-capture=compiled"], false],
+      [["--jitcache-capture=compiled", "--jitcache-capture=all"], true],
+      [["--jitcache-capture=all", "--jitcache-capture=compiled"], false],
+    ];
+    for (const [index, [flags, imageless]] of cases.entries()) {
+      const artifact = join(String(dir), `artifact-${index}`);
+      const report = join(String(dir), `producer-${index}.jsonl`);
+      const args = [`--jitcache=${artifact}`, "--jitcache-mode=p", "--jitcache-strict", "--jitcache-delta-at-exit", ...flags];
+      const run = await bun([...args, `--jitcache-bench-report=${report}`, app], String(dir));
+      expect(warnings(run.stderr)).toEqual([]);
+      expect(run.stdout).toBe(await offOutput());
+      expect(run.exitCode).toBe(0);
+      const committed = eventsNamed(report, "capture").filter(capture => capture.outcome === "committed");
+      expect(committed.some(capture => capture["committed.tier"] === 1)).toBe(true);
+      expect(committed.some(capture => capture["committed.tier"] === 0)).toBe(imageless);
     }
   });
 });
