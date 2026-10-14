@@ -408,11 +408,16 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(startEvents(report)).toEqual([{ outcome: "started", role: "producer" }]);
   });
 
-  test.concurrent("delta at exit commits bodies", async () => {
+  test.concurrent("--jitcache-delta-at-exit commits bodies at exit, and nothing else does", async () => {
     using dir = tempDir("jitcache-delta", {});
+    // Without the flag a producer keeps the captures its baseline compilations committed and calls no delta.
+    const plainReport = join(String(dir), "plain.jsonl");
+    await produce(join(String(dir), "plain"), String(dir), [], [`--jitcache-bench-report=${plainReport}`]);
+    expect(eventsNamed(plainReport, "delta")).toHaveLength(0);
+
     const artifact = join(String(dir), "artifact");
     const report = join(String(dir), "producer.jsonl");
-    await produce(artifact, String(dir), [], [`--jitcache-bench-report=${report}`]);
+    await produce(artifact, String(dir), [], ["--jitcache-delta-at-exit", `--jitcache-bench-report=${report}`]);
     // weigh and shape compiled with cold ICs, which their later calls filled, so the delta's captures beat the bodies
     // their compilations committed.
     const deltas = eventsNamed(report, "delta");

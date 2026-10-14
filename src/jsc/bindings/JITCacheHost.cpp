@@ -241,9 +241,10 @@ extern "C" void Bun__JITCache__atExit(JSC::JSGlobalObject* globalObject)
     std::optional<HostVM> hostVM = takeHostVM(vm);
 #endif
 
-    // THREAD's "no implicit delta" binds JITCache; the host calls delta at its idle point, for a VM still producing.
+    // THREAD's "no implicit delta" binds JITCache; the host calls delta at exit, its idle point, only when
+    // --jitcache-delta-at-exit asks, for a VM still producing.
     JSC::JITCache::Status status = JSC::JITCache::status(vm);
-    if (status.production == JSC::JITCache::ProductionState::Active) {
+    if (Bun__JITCache__flags()->deltaAtExit && status.production == JSC::JITCache::ProductionState::Active) {
         JSC::JITCache::delta(vm);
         status = JSC::JITCache::status(vm);
     }

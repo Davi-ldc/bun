@@ -299,7 +299,7 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     parse_param!("--cron-title <STR>               Title for cron execution mode"),
     parse_param!("--cron-period <STR>              Cron period for cron execution mode"),
     // JITCache (SPEC-integrator.md section 11.2): the jsc shell's flags with the same syntax, except the shell's
-    // --jitcache-delta-at-exit, --jitcache-maintenance, --jitcache-log and --jitcache-max-memory.
+    // --jitcache-maintenance, --jitcache-log and --jitcache-max-memory.
     parse_param!(
         "--jitcache <STR>?                 Run with JITCache over the artifact at the given path (./.jitcache by default)"
     ),
@@ -308,6 +308,9 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     ),
     parse_param!(
         "--jitcache-strict <STR>?          Validate the full structure of what JITCache reads: bare or 1 turns it on, 0 off"
+    ),
+    parse_param!(
+        "--jitcache-delta-at-exit          Save what each body learned when the process exits, in a producing role"
     ),
     parse_param!(
         "--jitcache-bench-report <STR>     Append JITCache's bench report to the given path"
@@ -865,6 +868,7 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
             _ => invalid_jitcache_flag("--jitcache-strict", strict, "Must be 0 or 1"),
         };
     }
+    flags.delta_at_exit = args.flag(b"--jitcache-delta-at-exit");
     flags.bench_report_path = path_flag("--jitcache-bench-report");
     // Only twins builds declare the four flags of the harness sub-SPEC's section 5.1, so only they read them; every other
     // build leaves their fields empty, in the one layout JITCacheFlags has.

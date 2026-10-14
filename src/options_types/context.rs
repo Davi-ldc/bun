@@ -585,6 +585,8 @@ pub struct JITCacheFlags {
     pub role: u8,
     /// `--jitcache-strict`.
     pub strict: bool,
+    /// `--jitcache-delta-at-exit`: the exit hook calls `delta` for a VM still producing.
+    pub delta_at_exit: bool,
     /// `--jitcache-bench-report`.
     pub bench_report_path: JITCacheText,
     /// The four flags of the harness sub-SPEC's section 5.1 that Bun takes. Only twins builds declare and read them,
@@ -603,6 +605,7 @@ impl JITCacheFlags {
         artifact_path: JITCacheText::EMPTY,
         role: 1,
         strict: false,
+        delta_at_exit: false,
         bench_report_path: JITCacheText::EMPTY,
         twins_report_path: JITCacheText::EMPTY,
         twins_record_layout_path: JITCacheText::EMPTY,
