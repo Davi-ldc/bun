@@ -148,6 +148,7 @@ static void startJITCache(JSC::VM& vm, VMKind kind, int32_t executionContextId, 
     // bench sets defaultProducerLimitBytes (section 16), from when the host leaves it empty for that default.
     config.producerLimitBytes = std::numeric_limits<size_t>::max();
     config.strict = flags.strict;
+    config.captureScope = static_cast<JSC::JITCache::CaptureScope>(flags.captureScope);
     config.benchReportPath = pathFor(kind, executionContextId, flags.benchReportPath);
     config.twinReportPath = pathFor(kind, executionContextId, flags.twinsReportPath);
 

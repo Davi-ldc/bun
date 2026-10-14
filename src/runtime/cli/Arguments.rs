@@ -313,6 +313,9 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
         "--jitcache-delta-at-exit          Save what each body learned when the process exits, in a producing role"
     ),
     parse_param!(
+        "--jitcache-capture <STR>          The bodies a producer saves: all that ran (all, the default) or only compiled ones (compiled)"
+    ),
+    parse_param!(
         "--jitcache-bench-report <STR>     Append JITCache's bench report to the given path"
     ),
     // The four flags of JITCache's test builds that Bun takes (SPEC-integrator.harness.md section 5.1), declared only in
@@ -869,6 +872,13 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
         };
     }
     flags.delta_at_exit = args.flag(b"--jitcache-delta-at-exit");
+    if let Some(scope) = args.option(b"--jitcache-capture") {
+        flags.capture_scope = match scope {
+            b"all" => 1,
+            b"compiled" => 2,
+            _ => invalid_jitcache_flag("--jitcache-capture", scope, "Must be all or compiled"),
+        };
+    }
     flags.bench_report_path = path_flag("--jitcache-bench-report");
     // Only twins builds declare the four flags of the harness sub-SPEC's section 5.1, so only they read them; every other
     // build leaves their fields empty, in the one layout JITCacheFlags has.
