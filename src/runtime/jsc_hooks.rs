@@ -2935,6 +2935,9 @@ fn transpile_source_code_inner(
                         None
                     };
                     let source_code = core::mem::take(&mut entry.output_code);
+                    // The entry's JITCache source digest of `source_code`, recorded when the entry was written, so
+                    // JITCache keys this module without reading its text again.
+                    let jitcache_source_digest = entry.metadata.jitcache_source_digest();
                     // When the cached entry was detected as
                     // CJS but lives inside a `"type":"module"` package, emit
                     // `package_json_type_module` so the C++ loader applies the
@@ -2992,6 +2995,8 @@ fn transpile_source_code_inner(
                         module_info,
                         tag,
                         bytecode_cache: node_compile_cache_blob.unwrap_or_default(),
+                        jitcache_source_digest: jitcache_source_digest.unwrap_or([0; 32]),
+                        has_jitcache_source_digest: jitcache_source_digest.is_some(),
                         ..Default::default()
                     });
                 }
@@ -3799,7 +3804,8 @@ export default db;
             bytecode_cache: Bytecode::persistent(bytecode),
             source_code_hash: file.source_hash,
             // With or without bytecode: JITCache keys the module by this digest instead of reading `source_code`.
-            jitcache_source_digest: file.jitcache_source_digest,
+            jitcache_source_digest: file.jitcache_source_digest.copied().unwrap_or([0; 32]),
+            has_jitcache_source_digest: file.jitcache_source_digest.is_some(),
             module_info: if !module_info.is_empty() {
                 let decoded = bun_bundler::analyze_transpiled_module::ModuleInfoSlotTable::parse(
                     module_info_strings,

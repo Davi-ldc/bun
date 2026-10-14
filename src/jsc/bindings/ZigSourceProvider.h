@@ -62,16 +62,16 @@ private:
         , m_alreadyBundled(resolvedSource.already_bundled)
         , m_bunVM(bunVM)
         , m_source(WTF::move(sourceImpl))
-        , m_jitCacheSourceDigest(copyJITCacheSourceDigest(resolvedSource.jitcache_source_digest))
+        , m_jitCacheSourceDigest(copyJITCacheSourceDigest(resolvedSource))
     {
     }
 
-    static std::optional<std::array<uint8_t, 32>> copyJITCacheSourceDigest(const uint8_t* digest)
+    static std::optional<std::array<uint8_t, 32>> copyJITCacheSourceDigest(const ResolvedSource& resolvedSource)
     {
-        if (!digest)
+        if (!resolvedSource.has_jitcache_source_digest)
             return std::nullopt;
         std::array<uint8_t, 32> copy;
-        std::copy_n(digest, copy.size(), copy.begin());
+        std::ranges::copy(resolvedSource.jitcache_source_digest, copy.begin());
         return copy;
     }
 
@@ -81,8 +81,8 @@ private:
     RefPtr<JSC::CachedBytecode> m_cachedBytecode;
     Ref<WTF::StringImpl> m_source;
     unsigned m_hash = 0;
-    // `bun build --compile`: the digest the executable recorded for m_source, which JITCache keys the module with
-    // instead of reading the text (JSC::SourceProvider::jitCacheSourceDigest).
+    // The digest recorded for m_source where the text was produced, by `bun build --compile` or the runtime transpiler
+    // cache, which JITCache keys the module with instead of reading the text (JSC::SourceProvider::jitCacheSourceDigest).
     const std::optional<std::array<uint8_t, 32>> m_jitCacheSourceDigest;
 };
 

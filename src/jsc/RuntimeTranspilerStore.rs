@@ -965,11 +965,15 @@ impl TranspilerJob {
                 None
             };
 
+            // The entry's JITCache source digest of its output, recorded when the entry was written.
+            let jitcache_source_digest = entry.metadata.jitcache_source_digest();
             self.resolved_source = ResolvedSource {
                 source_code: core::mem::take(&mut entry.output_code),
                 is_commonjs_module: entry.metadata.module_type == CacheModuleType::Cjs,
                 module_info,
                 tag: this_tag,
+                jitcache_source_digest: jitcache_source_digest.unwrap_or([0; 32]),
+                has_jitcache_source_digest: jitcache_source_digest.is_some(),
                 ..Default::default()
             };
 

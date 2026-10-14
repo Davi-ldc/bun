@@ -146,12 +146,15 @@ typedef struct ResolvedSource {
     // File path whose file:// URL is the source origin (what import() resolves against, what a bytecode cache is
     // validated against). If empty, origin is derived from source_url.
     BunString origin_path;
-    // `bun build --compile`: the JITCache source digest of source_code, 32 bytes in the executable's section recorded at
-    // build time, or null. Zig::SourceProvider copies it and vouches for it as it does for source_code_hash.
-    const uint8_t* jitcache_source_digest;
+    // JITCache's source digest of source_code, recorded where the text was produced: by `bun build --compile` in the
+    // executable's section, or by the runtime transpiler cache in the entry the text came from. Valid only with
+    // has_jitcache_source_digest. Zig::SourceProvider copies it and vouches for it as it does for source_code_hash.
+    uint8_t jitcache_source_digest[32];
+    bool has_jitcache_source_digest;
 } ResolvedSource;
-static_assert(sizeof(ResolvedSource) == 144, "ResolvedSource layout is mirrored in src/jsc/ResolvedSource.rs");
+static_assert(sizeof(ResolvedSource) == 176, "ResolvedSource layout is mirrored in src/jsc/ResolvedSource.rs");
 static_assert(offsetof(ResolvedSource, jitcache_source_digest) == 136, "ResolvedSource layout is mirrored in src/jsc/ResolvedSource.rs");
+static_assert(offsetof(ResolvedSource, has_jitcache_source_digest) == 168, "ResolvedSource layout is mirrored in src/jsc/ResolvedSource.rs");
 inline constexpr uint32_t ResolvedSourceTagPackageJSONTypeModule = 1;
 typedef union ErrorableResolvedSourceResult {
     ResolvedSource value;
@@ -180,7 +183,7 @@ public:
             zig__ModuleInfoDeserialized__deinit(result.value.module_info);
     }
 };
-static_assert(sizeof(ErrorableResolvedSource) == 152 && alignof(ErrorableResolvedSource) == 8, "ErrorableResolvedSource layout is mirrored in src/jsc/Errorable.rs");
+static_assert(sizeof(ErrorableResolvedSource) == 184 && alignof(ErrorableResolvedSource) == 8, "ErrorableResolvedSource layout is mirrored in src/jsc/Errorable.rs");
 
 typedef struct SystemError {
     int errno_;

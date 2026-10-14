@@ -56,7 +56,34 @@ bun_core::declare_scope!(cache, visible);
 /// u8/u16/u32 ids and implied slots dropped, instead of fixed u32 arrays.
 /// Version 27: ModuleInfo string table holds Latin-1 / UTF-16 bodies, not WTF-8.
 /// Version 28: the define table and `--drop` entries participate in the features hash.
-const EXPECTED_VERSION: u32 = 28;
+/// Version 29: the metadata carries JITCache's source digest of the output.
+const EXPECTED_VERSION: u32 = 29;
+
+unsafe extern "C" {
+    fn Bun__JITCacheSourceDigestLatin1(ptr: *const u8, len: usize, out: *mut u8);
+    fn Bun__JITCacheSourceDigestUTF16(ptr: *const u16, len: usize, out: *mut u8);
+}
+
+/// JITCache's source digest of the text a cache hit gives the module's provider (SPEC-ucb.md section 3.5), computed
+/// once, when the entry is written, so a later process keys the module without hashing its text. Latin-1 output and
+/// ASCII UTF-8 output are those code units; UTF-16 output is digested as UTF-16, which narrows itself when every unit
+/// fits Latin-1. Non-ASCII UTF-8 output gets none (32 zero bytes): a hit transcodes it, and JITCache digests the result.
+fn jitcache_source_digest(output_code: &BunString) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    if output_code.is_utf16() {
+        let units = output_code.utf16();
+        // SAFETY: reads `units.len()` UTF-16 units and writes 32 bytes to `digest`; pure function.
+        unsafe { Bun__JITCacheSourceDigestUTF16(units.as_ptr(), units.len(), digest.as_mut_ptr()) };
+        return digest;
+    }
+    let bytes = output_code.byte_slice();
+    if output_code.is_utf8() && !bun_core::strings::is_all_ascii(bytes) {
+        return digest;
+    }
+    // SAFETY: reads `bytes.len()` bytes and writes 32 bytes to `digest`; pure function.
+    unsafe { Bun__JITCacheSourceDigestLatin1(bytes.as_ptr(), bytes.len(), digest.as_mut_ptr()) };
+    digest
+}
 
 /// Source files smaller than this are not written to / read from the on-disk
 /// transpiler cache. Originally 50 KiB, which excluded almost every file in a
@@ -120,6 +147,9 @@ pub struct Metadata {
     pub(crate) esm_record_byte_offset: u64,
     pub(crate) esm_record_byte_length: u64,
     pub(crate) esm_record_hash: u64,
+
+    /// JITCache's source digest of the output (`jitcache_source_digest`); 32 zero bytes when the entry has none.
+    pub jitcache_source_digest: [u8; 32],
 }
 
 impl Default for Metadata {
@@ -140,13 +170,19 @@ impl Default for Metadata {
             esm_record_byte_offset: 0,
             esm_record_byte_length: 0,
             esm_record_hash: 0,
+            jitcache_source_digest: [0; 32],
         }
     }
 }
 
 impl Metadata {
-    // 1×u32 + 2×u8 (enum reprs) + 12×u64 = 4 + 2 + 96 = 102
-    pub(crate) const SIZE: usize = 4 + 1 + 1 + 12 * 8;
+    // 1×u32 + 2×u8 (enum reprs) + 12×u64 + 32 digest bytes = 4 + 2 + 96 + 32 = 134
+    pub(crate) const SIZE: usize = 4 + 1 + 1 + 12 * 8 + 32;
+
+    /// The digest a cache hit hands the module's provider, if the entry has one.
+    pub fn jitcache_source_digest(&self) -> Option<[u8; 32]> {
+        (self.jitcache_source_digest != [0; 32]).then_some(self.jitcache_source_digest)
+    }
 
     pub(crate) fn encode<W: bun_io::Write>(&self, writer: &mut W) -> crate::CrateResult<()> {
         writer.write_int_le::<u32>(self.cache_version)?;
@@ -169,6 +205,10 @@ impl Metadata {
         writer.write_int_le::<u64>(self.esm_record_byte_offset)?;
         writer.write_int_le::<u64>(self.esm_record_byte_length)?;
         writer.write_int_le::<u64>(self.esm_record_hash)?;
+
+        for byte in self.jitcache_source_digest {
+            writer.write_int_le::<u8>(byte)?;
+        }
         Ok(())
     }
 
@@ -205,6 +245,10 @@ impl Metadata {
         self.esm_record_byte_offset = reader.read_int_le::<u64>()?;
         self.esm_record_byte_length = reader.read_int_le::<u64>()?;
         self.esm_record_hash = reader.read_int_le::<u64>()?;
+
+        for byte in &mut self.jitcache_source_digest {
+            *byte = reader.read_int_le::<u8>()?;
+        }
 
         self.module_type = match module_type_raw {
             1 => ModuleType::Esm,
@@ -291,6 +335,7 @@ impl Entry {
                     esm_record_byte_offset: (Metadata::SIZE + output_bytes.len() + sourcemap.len())
                         as u64,
                     esm_record_byte_length: esm_record.len() as u64,
+                    jitcache_source_digest: jitcache_source_digest(output_code),
                     ..Default::default()
                 };
 

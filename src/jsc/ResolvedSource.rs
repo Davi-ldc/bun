@@ -40,10 +40,12 @@ pub struct ResolvedSource {
     /// The file path whose `file://` URL is this module's source origin (what `import()` resolves against and what a
     /// bytecode cache is validated against). Empty: derived from `source_url` (a builtin gets a `builtin://` origin).
     pub origin_path: BunString,
-    /// `bun build --compile`: the JITCache source digest of `source_code`, 32 bytes in the executable's section, recorded
-    /// at build time (`Flags::HAS_JITCACHE_SOURCE_DIGESTS`). `Zig::SourceProvider` copies it and vouches for it as it
-    /// does for `source_code_hash`. None: not recorded.
-    pub jitcache_source_digest: Option<&'static [u8; 32]>,
+    /// JITCache's source digest of `source_code`, recorded where the text was produced: by `bun build --compile` in the
+    /// executable's section (`Flags::HAS_JITCACHE_SOURCE_DIGESTS`), or by the runtime transpiler cache in the entry the
+    /// text came from. Valid only with `has_jitcache_source_digest`. `Zig::SourceProvider` copies it and vouches for it
+    /// as it does for `source_code_hash`.
+    pub jitcache_source_digest: [u8; 32],
+    pub has_jitcache_source_digest: bool,
 }
 
 /// `ResolvedSource.bytecode_cache`: C++ sees `{ uint8_t* ptr; size_t len; bool owned; }`.
@@ -121,4 +123,4 @@ extern "C" fn ResolvedSource__freeBytecode(bytecode: *mut u8) {
     unsafe { bun_alloc::default_alloc::free(bytecode.cast()) };
 }
 
-bun_core::assert_ffi_layout!(ResolvedSource, 144, 8; jitcache_source_digest @ 136);
+bun_core::assert_ffi_layout!(ResolvedSource, 176, 8; jitcache_source_digest @ 136, has_jitcache_source_digest @ 168);
