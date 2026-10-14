@@ -30,7 +30,7 @@ struct JITCacheFlags {
     uint8_t role; // --jitcache-mode, as JSC::JITCache::Role: 1 consumer, 2 producer, 3 consumer-producer
     bool strict; // --jitcache-strict
     bool deltaAtExit; // --jitcache-delta-at-exit: the exit hook calls delta for a VM still producing
-    uint8_t captureScope; // --jitcache-capture, as JSC::JITCache::CaptureScope: 1 all (the default), 2 compiled
+    uint8_t deltaCapture; // --jitcache-delta-capture, as JSC::JITCache::DeltaCapture: 1 all (the default), 2 compiled
     JITCacheFlagText benchReportPath; // --jitcache-bench-report
     // The four flags of harness sub-SPEC section 5.1 that Bun takes. Only twins builds declare and read them, under
     // cfg(jitcache_twins), and act on them, under ENABLE(JITCACHE_TWINS); every other build leaves them empty. They stay

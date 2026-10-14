@@ -593,7 +593,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     for (const [flag, value] of [
       ["--jitcache-mode", "x"],
       ["--jitcache-strict", "2"],
-      ["--jitcache-capture", "x"],
+      ["--jitcache-delta-capture", "x"],
       ["--jitcache-bench-report", ""],
     ]) {
       const run = await bun([`--jitcache=${artifact}`, `${flag}=${value}`, app], String(dir));
@@ -697,16 +697,16 @@ describe.skipIf(!isLinux)("JITCache", () => {
     }
   });
 
-  test.concurrent("--jitcache-capture: all, the default, also commits bodies without an image, compiled does not", async () => {
-    using dir = tempDir("jitcache-capture", {});
+  test.concurrent("--jitcache-delta-capture: all, the default, also commits bodies without an image, compiled does not", async () => {
+    using dir = tempDir("jitcache-delta-capture", {});
     // The app's top level runs once and never compiles, so with all the delta at exit commits it at tier 0 (THREAD
-    // Capture); weigh and shape compile, so every scope commits them with an image.
+    // Capture); weigh and shape compile, so every value commits them with an image.
     const cases: [string[], boolean][] = [
       [[], true],
-      [["--jitcache-capture=all"], true],
-      [["--jitcache-capture=compiled"], false],
-      [["--jitcache-capture=compiled", "--jitcache-capture=all"], true],
-      [["--jitcache-capture=all", "--jitcache-capture=compiled"], false],
+      [["--jitcache-delta-capture=all"], true],
+      [["--jitcache-delta-capture=compiled"], false],
+      [["--jitcache-delta-capture=compiled", "--jitcache-delta-capture=all"], true],
+      [["--jitcache-delta-capture=all", "--jitcache-delta-capture=compiled"], false],
     ];
     for (const [index, [flags, imageless]] of cases.entries()) {
       const artifact = join(String(dir), `artifact-${index}`);

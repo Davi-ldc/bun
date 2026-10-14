@@ -313,7 +313,7 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
         "--jitcache-delta-at-exit          Save what each body learned when the process exits, in a producing role"
     ),
     parse_param!(
-        "--jitcache-capture <STR>          The bodies a producer saves: all that ran (all, the default) or only compiled ones (compiled)"
+        "--jitcache-delta-capture <STR>    What delta saves: every body that ran (all, the default) or only compiled ones (compiled)"
     ),
     parse_param!(
         "--jitcache-bench-report <STR>     Append JITCache's bench report to the given path"
@@ -872,11 +872,11 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
         };
     }
     flags.delta_at_exit = args.flag(b"--jitcache-delta-at-exit");
-    if let Some(scope) = args.option(b"--jitcache-capture") {
-        flags.capture_scope = match scope {
+    if let Some(delta_capture) = args.option(b"--jitcache-delta-capture") {
+        flags.delta_capture = match delta_capture {
             b"all" => 1,
             b"compiled" => 2,
-            _ => invalid_jitcache_flag("--jitcache-capture", scope, "Must be all or compiled"),
+            _ => invalid_jitcache_flag("--jitcache-delta-capture", delta_capture, "Must be all or compiled"),
         };
     }
     flags.bench_report_path = path_flag("--jitcache-bench-report");
