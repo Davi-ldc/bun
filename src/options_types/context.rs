@@ -585,7 +585,8 @@ pub struct JITCacheFlags {
     pub role: u8,
     /// `--jitcache-strict`.
     pub strict: bool,
-    /// `--jitcache-delta-at-exit`: the exit hook calls `delta` for a VM still producing.
+    /// `--jitcache-delta-at-exit`, on unless `=0`: the exit hook calls `delta` for a VM still producing, which a
+    /// consumer never is.
     pub delta_at_exit: bool,
     /// `--jitcache-delta-capture`, as `JSC::JITCache::DeltaCapture`: 1 all (the default), 2 compiled.
     pub delta_capture: u8,
@@ -602,12 +603,12 @@ pub struct JITCacheFlags {
 }
 
 impl JITCacheFlags {
-    /// No `--jitcache` and no other JITCache flag.
+    /// No `--jitcache` and no other JITCache flag: each flag's default.
     pub const OFF: Self = Self {
         artifact_path: JITCacheText::EMPTY,
         role: 1,
         strict: false,
-        delta_at_exit: false,
+        delta_at_exit: true,
         delta_capture: 1,
         bench_report_path: JITCacheText::EMPTY,
         twins_report_path: JITCacheText::EMPTY,

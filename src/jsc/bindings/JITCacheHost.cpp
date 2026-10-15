@@ -242,8 +242,8 @@ extern "C" void Bun__JITCache__atExit(JSC::JSGlobalObject* globalObject)
     std::optional<HostVM> hostVM = takeHostVM(vm);
 #endif
 
-    // THREAD's "no implicit delta" binds JITCache; the host calls delta at exit, its idle point, only when
-    // --jitcache-delta-at-exit asks, for a VM still producing.
+    // THREAD's "no implicit delta" binds JITCache; the host calls delta at exit, its idle point, for a VM still
+    // producing, unless --jitcache-delta-at-exit=0 turns it off. A consumer never produces, so it never calls delta.
     JSC::JITCache::Status status = JSC::JITCache::status(vm);
     if (Bun__JITCache__flags()->deltaAtExit && status.production == JSC::JITCache::ProductionState::Active) {
         JSC::JITCache::delta(vm);
@@ -277,5 +277,6 @@ extern "C" int Bun__JITCache__runMaintenance(int argc, const char* const* argv)
     Vector<CString> arguments;
     for (const char* argument : std::span(argv, static_cast<size_t>(argc)))
         arguments.append(CString(argument));
-    return JSC::JITCache::Maintenance::runCommandLine(arguments.span(), stdin, stdout, stderr);
+    // Bun's syntax leaves the ratio out for 0; the jsc shell's always names it.
+    return JSC::JITCache::Maintenance::runCommandLine(arguments.span(), stdin, stdout, stderr, JSC::JITCache::Maintenance::RatioArgument::Optional);
 }

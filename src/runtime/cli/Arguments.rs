@@ -299,7 +299,8 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     parse_param!("--cron-title <STR>               Title for cron execution mode"),
     parse_param!("--cron-period <STR>              Cron period for cron execution mode"),
     // JITCache (SPEC-integrator.md section 11.2): the jsc shell's flags with the same syntax, except the shell's
-    // --jitcache-maintenance, --jitcache-log and --jitcache-max-memory.
+    // --jitcache-maintenance, --jitcache-log and --jitcache-max-memory, and --jitcache-delta-at-exit, which here takes a
+    // value and is on by default.
     parse_param!(
         "--jitcache <STR>?                 Run with JITCache over the artifact at the given path (./.jitcache by default)"
     ),
@@ -310,7 +311,7 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
         "--jitcache-strict <STR>?          Validate the full structure of what JITCache reads: bare or 1 turns it on, 0 off"
     ),
     parse_param!(
-        "--jitcache-delta-at-exit          Save what each body learned when the process exits, in a producing role"
+        "--jitcache-delta-at-exit <STR>?   Save what each body learned when the process exits, in a producing role: on by default, 0 turns it off"
     ),
     parse_param!(
         "--jitcache-delta-capture <STR>    What delta saves: every body that ran (all, the default) or only compiled ones (compiled)"
@@ -846,6 +847,15 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
         }
         JITCacheText::leak(resolve(path))
     };
+    // A switch flag is on bare or with 1 and off with 0; without the flag it keeps its default.
+    let switch_flag = |flag: &'static str, default: bool| -> bool {
+        match args.option(flag.as_bytes()) {
+            None => default,
+            Some(b"" | b"1") => true,
+            Some(b"0") => false,
+            Some(value) => invalid_jitcache_flag(flag, value, "Must be 0 or 1"),
+        }
+    };
 
     let mut flags = JITCacheFlags::OFF;
     if let Some(path) = args.option(b"--jitcache") {
@@ -864,14 +874,8 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
             _ => invalid_jitcache_flag("--jitcache-mode", mode, "Must be c, p or p-c"),
         };
     }
-    if let Some(strict) = args.option(b"--jitcache-strict") {
-        flags.strict = match strict {
-            b"" | b"1" => true,
-            b"0" => false,
-            _ => invalid_jitcache_flag("--jitcache-strict", strict, "Must be 0 or 1"),
-        };
-    }
-    flags.delta_at_exit = args.flag(b"--jitcache-delta-at-exit");
+    flags.strict = switch_flag("--jitcache-strict", flags.strict);
+    flags.delta_at_exit = switch_flag("--jitcache-delta-at-exit", flags.delta_at_exit);
     if let Some(delta_capture) = args.option(b"--jitcache-delta-capture") {
         flags.delta_capture = match delta_capture {
             b"all" => 1,

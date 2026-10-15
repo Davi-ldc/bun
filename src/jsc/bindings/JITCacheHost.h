@@ -29,7 +29,7 @@ struct JITCacheFlags {
     JITCacheFlagText artifactPath; // --jitcache, resolved against the working directory; empty without it: JITCache off
     uint8_t role; // --jitcache-mode, as JSC::JITCache::Role: 1 consumer, 2 producer, 3 consumer-producer
     bool strict; // --jitcache-strict
-    bool deltaAtExit; // --jitcache-delta-at-exit: the exit hook calls delta for a VM still producing
+    bool deltaAtExit; // --jitcache-delta-at-exit, on unless =0: the exit hook calls delta for a VM still producing
     uint8_t deltaCapture; // --jitcache-delta-capture, as JSC::JITCache::DeltaCapture: 1 all (the default), 2 compiled
     JITCacheFlagText benchReportPath; // --jitcache-bench-report
     // The four flags of harness sub-SPEC section 5.1 that Bun takes. Only twins builds declare and read them, under
@@ -71,6 +71,6 @@ extern "C" const Bun::JITCacheFlags* Bun__JITCache__flags();
 // bench report's flush in every role.
 extern "C" void Bun__JITCache__atExit(JSC::JSGlobalObject*);
 
-// `bun jitcache <command>` (maintenance sub-SPEC section 5): runs the maintenance command line on argv[0..argc) with
-// stdin, stdout and stderr, and returns its exit code. It needs no VM.
+// `bun jitcache <command>` (maintenance sub-SPEC section 5): runs the maintenance command line on argv[0..argc), compact's
+// ratio optional, with stdin, stdout and stderr, and returns its exit code. It needs no VM.
 extern "C" int Bun__JITCache__runMaintenance(int argc, const char* const* argv);

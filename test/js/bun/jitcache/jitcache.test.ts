@@ -88,9 +88,9 @@ function startEvents(path: string): { outcome: string; role: string }[] {
   return eventsNamed(path, "start").map(({ outcome, role }) => ({ outcome, role }));
 }
 
-// The bodies cache/pack lists, in key order: its current root is the root slot (at 64 and 128) with the higher
-// generation, and its index the full index that root's chain of index blocks ends at, followed by the deltas in order.
-// Each body is its record's offset plus the 64-byte record header, and its size.
+// The bodies cache/pack lists, in key order: its root at 56 is its valid end, the 8 bytes before the valid end give the
+// latest index block's offset, and its index is the full index that block's chain ends at, followed by the deltas in
+// order. Each body is its record's offset plus the 64-byte record header, and its size.
 interface PackedBody {
   key: string;
   start: number;
@@ -103,9 +103,9 @@ function packBodies(artifact: string): PackedBody[] {
   const view = dataView(bytes);
   expect(bytes.subarray(0, 8).toString("latin1")).toBe("JITCPACK");
   const u64 = (offset: number) => Number(view.getBigUint64(offset, true));
-  const slot = u64(64) > u64(128) ? 64 : 128;
+  const validEnd = u64(56);
   const chain: number[] = [];
-  for (let at = u64(slot + 16); ; at = u64(at + 8)) {
+  for (let at = u64(validEnd - 8); ; at = u64(at + 8)) {
     expect(bytes.subarray(at, at + 8).toString("latin1")).toBe("JITCINDX");
     chain.push(at);
     if (view.getUint32(at + 16, true) === 0) break;
@@ -443,16 +443,20 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(startEvents(report)).toEqual([{ outcome: "started", role: "producer" }]);
   });
 
-  test.concurrent("--jitcache-delta-at-exit commits bodies at exit, and nothing else does", async () => {
+  test.concurrent("a producer calls delta at exit unless --jitcache-delta-at-exit=0, and nothing else does", async () => {
     using dir = tempDir("jitcache-delta", {});
-    // Without the flag a producer keeps the captures its baseline compilations committed and calls no delta.
-    const plainReport = join(String(dir), "plain.jsonl");
-    await produce(join(String(dir), "plain"), String(dir), [], [`--jitcache-bench-report=${plainReport}`]);
-    expect(eventsNamed(plainReport, "delta")).toHaveLength(0);
+    // With =0, the last occurrence included, a producer keeps the captures its baseline compilations committed and calls
+    // no delta.
+    for (const [index, flags] of [["--jitcache-delta-at-exit=0"], ["--jitcache-delta-at-exit", "--jitcache-delta-at-exit=0"]].entries()) {
+      const plainReport = join(String(dir), `plain-${index}.jsonl`);
+      await produce(join(String(dir), `plain-${index}`), String(dir), [], [...flags, `--jitcache-bench-report=${plainReport}`]);
+      expect(eventsNamed(plainReport, "delta")).toHaveLength(0);
+    }
 
+    // Without the flag, delta at exit is on.
     const artifact = join(String(dir), "artifact");
     const report = join(String(dir), "producer.jsonl");
-    await produce(artifact, String(dir), [], ["--jitcache-delta-at-exit", `--jitcache-bench-report=${report}`]);
+    await produce(artifact, String(dir), [], [`--jitcache-bench-report=${report}`]);
     // weigh and shape compiled with cold ICs, which their later calls filled, so the delta's captures beat the bodies
     // their compilations committed.
     const deltas = eventsNamed(report, "delta");
@@ -464,14 +468,14 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(committed.length).toBe(deltas[0].committedBodies);
     // The pack lists every committed key once, its newest version winning. The delta's pack event reports the pack it
     // left, which it compacts exactly when the pack holds more than its live records and one full index (a 32-byte block
-    // header and an 80-byte entry per body); the compaction leaves exactly those.
+    // header, an 80-byte entry per body and an 8-byte trailer); the compaction leaves exactly those.
     const keys = new Set(committed.map(capture => capture.key));
     const listed = new Set(packBodies(artifact).map(body => body.key));
     for (const key of keys) expect(listed.has(key)).toBe(true);
     const packs = eventsNamed(report, "pack");
     expect(packs).toHaveLength(1);
     expect(packs[0].bytes).toBe(packs[0].liveBytes + packs[0].deadBytes);
-    const denseBytes = packs[0].liveBytes + 32 + 80 * packs[0].bodies;
+    const denseBytes = packs[0].liveBytes + 32 + 80 * packs[0].bodies + 8;
     expect(packs[0].compacted).toBe(packs[0].bytes > denseBytes ? 1 : 0);
     if (packs[0].compacted) expect(packs[0].compactedBytes).toBe(denseBytes);
   });
@@ -480,24 +484,26 @@ describe.skipIf(!isLinux)("JITCache", () => {
     using dir = tempDir("jitcache-maintenance", {});
     const artifact = join(String(dir), "artifact");
     const missing = join(String(dir), "missing");
-    await produce(artifact, String(dir));
+    // Without delta at exit, which ends in a compaction, the pack keeps the index blocks of the producer's commits.
+    await produce(artifact, String(dir), [], ["--jitcache-delta-at-exit=0"]);
     const maintenance = (...args: string[]) => bun(["jitcache", ...args], String(dir));
     const summary = (run: Run) => run.stdout.split("\n").filter(line => /^compact: /.test(line));
     const header = join(artifact, "cache", "header");
     const pack = join(artifact, "cache", "pack");
 
-    // Ratio 0 evicts nothing: it removes the temporary and drops the pack's dead bytes, and reports both.
+    // A first argument that is no number is the path, and the ratio is 0, which evicts nothing: it removes the temporary
+    // and drops the pack's dead bytes, and reports both.
     const temporary = addTemporary(artifact, 100);
     const bodies = packBodies(artifact).length;
     const packBytes = statSync(pack).size;
-    const cleanup = await maintenance("compact", "0", artifact);
+    const cleanup = await maintenance("compact", artifact);
     const reclaimed = /^compact: done, 1 temporaries removed, 0 bodies evicted, (\d+) bytes reclaimed$/.exec(summary(cleanup)[0] ?? "");
     expect(Number(reclaimed?.[1])).toBe(100 + packBytes - statSync(pack).size);
     expect(cleanup.exitCode).toBe(0);
     expect(existsSync(temporary)).toBe(false);
     expect(packBodies(artifact).length).toBe(bodies);
 
-    // A second one finds nothing left to remove.
+    // A second one, with the ratio named, finds nothing left to remove.
     const nothingLeft = await maintenance("compact", "0", artifact);
     expect(summary(nothingLeft)).toEqual(["compact: done, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed"]);
     expect(nothingLeft.exitCode).toBe(0);
@@ -528,18 +534,18 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(badRatio.stderr).toContain("bad-ratio");
     expect(badRatio.exitCode).toBe(1);
 
+    // A ratio after the path is a second path.
     const usageErrors = [
       [],
       ["frobnicate"],
       ["clean", artifact],
-      ["compact"],
-      ["compact", "half"],
       ["compact", "0", artifact, missing],
+      ["compact", artifact, "0.5"],
       ["compact", "1", artifact, "--maybe"],
     ];
     for (const args of usageErrors) {
       const usage = await maintenance(...args);
-      expect(usage.stderr).toContain("usage: compact <ratio> [<path>] [--yes | --no]");
+      expect(usage.stderr).toContain("usage: compact [<ratio>] [<path>] [--yes | --no]");
       expect(usage.exitCode).toBe(2);
     }
 
@@ -598,6 +604,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     for (const [flag, value] of [
       ["--jitcache-mode", "x"],
       ["--jitcache-strict", "2"],
+      ["--jitcache-delta-at-exit", "2"],
       ["--jitcache-delta-capture", "x"],
       ["--jitcache-bench-report", ""],
     ]) {
@@ -647,7 +654,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     ]);
   });
 
-  test.concurrent("bun jitcache compact without a path works on ./.jitcache", async () => {
+  test.concurrent("bun jitcache compact without a path works on ./.jitcache, with or without a ratio", async () => {
     using dir = tempDir("jitcache-default-path", { project: {}, empty: {} });
     const project = join(String(dir), "project");
     const artifact = join(project, ".jitcache");
@@ -661,10 +668,20 @@ describe.skipIf(!isLinux)("JITCache", () => {
     expect(existsSync(temporary)).toBe(false);
     expect(existsSync(join(artifact, "cache", "header"))).toBe(true);
 
+    // Without a ratio, too, it is 0: the second temporary goes, and the pack, already compact, keeps every byte.
+    const secondTemporary = addTemporary(artifact, 64);
+    const cleaned = await bun(["jitcache", "compact"], project);
+    expect(cleaned.stdout).toContain("compact: done, 1 temporaries removed, 0 bodies evicted, 64 bytes reclaimed");
+    expect(cleaned.exitCode).toBe(0);
+    expect(existsSync(secondTemporary)).toBe(false);
+    expect(existsSync(join(artifact, "cache", "header"))).toBe(true);
+
     const empty = join(String(dir), "empty");
-    const nothing = await bun(["jitcache", "compact", "0"], empty);
-    expect(nothing.stdout).toContain("compact: no-artifact, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed");
-    expect(nothing.exitCode).toBe(0);
+    for (const args of [["compact", "0"], ["compact"]]) {
+      const nothing = await bun(["jitcache", ...args], empty);
+      expect(nothing.stdout).toContain("compact: no-artifact, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed");
+      expect(nothing.exitCode).toBe(0);
+    }
     expect(existsSync(join(empty, ".jitcache"))).toBe(false);
   });
 

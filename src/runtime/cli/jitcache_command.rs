@@ -1,7 +1,7 @@
 //! `bun jitcache`: JITCache's maintenance command line (SPEC-integrator.maintenance.md section 5),
-//! `compact <ratio> [<path>] [--yes|--no]`, on `./.jitcache` without a path. It needs no
-//! context, config or VM: `Bun__JITCache__runMaintenance` (src/jsc/bindings/JITCacheHost.cpp) hands the arguments to
-//! JSC's `Maintenance::runCommandLine`, whose exit code becomes Bun's.
+//! `compact [<ratio>] [<path>] [--yes|--no]`, with ratio 0 when the first argument is not a number and `./.jitcache`
+//! without a path. It needs no context, config or VM: `Bun__JITCache__runMaintenance` (src/jsc/bindings/JITCacheHost.cpp)
+//! hands the arguments to JSC's `Maintenance::runCommandLine` with the ratio optional, and its exit code becomes Bun's.
 
 use core::ffi::{c_char, c_int};
 
