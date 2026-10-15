@@ -242,34 +242,30 @@ extern "C" void Bun__JITCache__atExit(JSC::JSGlobalObject* globalObject)
     std::optional<HostVM> hostVM = takeHostVM(vm);
 #endif
 
-    // THREAD's "no implicit delta" binds JITCache; the host calls delta at exit, its idle point, for a VM still
-    // producing, unless --jitcache-delta-at-exit=0 turns it off. A consumer never produces, so it never calls delta.
-    JSC::JITCache::Status status = JSC::JITCache::status(vm);
-    if (Bun__JITCache__flags()->deltaAtExit && status.production == JSC::JITCache::ProductionState::Active) {
-        JSC::JITCache::delta(vm);
-        status = JSC::JITCache::status(vm);
-    }
+    // JITCache never calls delta on its own; Bun asks for it at exit, its idle point, unless --jitcache-delta-at-exit=0
+    // turns it off, and finishHostRun calls it for a VM still producing. finishHostRun then runs the work below and
+    // flushes the bench report, which a consumer, never calling delta, needs at exit: Bun destroys its main VM only under
+    // BUN_DESTRUCT_VM_ON_EXIT.
+    JSC::JITCache::finishHostRun(vm, Bun__JITCache__flags()->deltaAtExit, [&](const std::optional<JSC::JITCache::DeltaResult>&) {
+        JSC::JITCache::Status status = JSC::JITCache::status(vm);
 
-    // The API makes no callbacks, so the exit is where a host learns of a fault.
-    if (status.activityFault)
-        warnOff(makeString("warn: JITCache is off: "_s, stepAndDetail(status.activityFault->stepName(), status.activityFault->detail)));
-    else if (status.productionFault)
-        warnOff(makeString("warn: JITCache stopped writing the cache: "_s, stepAndDetail(status.productionFault->stepName(), status.productionFault->detail)));
+        // JITCache tells a host of no fault as it happens, so the exit is where Bun learns of one.
+        if (status.activityFault)
+            warnOff(makeString("warn: JITCache is off: "_s, stepAndDetail(status.activityFault->stepName(), status.activityFault->detail)));
+        else if (status.productionFault)
+            warnOff(makeString("warn: JITCache stopped writing the cache: "_s, stepAndDetail(status.productionFault->stepName(), status.productionFault->detail)));
 
 #if ENABLE(JITCACHE_TWINS)
-    if (hostVM) {
-        // The runner's status checks read one final status line per VM the host configured (harness sub-SPEC section 7.7).
-        if (hostVM->started && Bun__JITCache__flags()->twinsReportPath.length)
-            writeStderrLine(JSC::JITCache::toJSON(status));
-        // Harness sub-SPEC section 10.3, whether or not JITCache is configured.
-        if (!hostVM->bodyEventsPath.isEmpty())
-            JSC::JITCache::writeBodyEvents(vm, hostVM->bodyEventsPath);
-    }
+        if (hostVM) {
+            // The runner's status checks read one final status line per VM the host configured.
+            if (hostVM->started && Bun__JITCache__flags()->twinsReportPath.length)
+                writeStderrLine(JSC::JITCache::toJSON(status));
+            // The body-event dump, whether or not JITCache is configured.
+            if (!hostVM->bodyEventsPath.isEmpty())
+                JSC::JITCache::writeBodyEvents(vm, hostVM->bodyEventsPath);
+        }
 #endif
-
-    // A consumer never calls delta, and Bun destroys its main VM at exit only under BUN_DESTRUCT_VM_ON_EXIT, so without
-    // this flush the events still buffered would be lost.
-    JSC::JITCache::flushBenchReport(vm);
+    });
 }
 
 extern "C" int Bun__JITCache__runMaintenance(int argc, const char* const* argv)
