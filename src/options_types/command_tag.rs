@@ -45,7 +45,7 @@ pub enum Tag {
     DedupeCommand,
     PruneCommand,
     FuzzilliCommand,
-    /// `bun jitcache`: JITCache's maintenance command line, `clean` and `compact`.
+    /// `bun jitcache`: JITCache's maintenance command line, `compact`.
     JITCacheCommand,
 }
 

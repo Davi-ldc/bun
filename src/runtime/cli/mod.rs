@@ -672,9 +672,8 @@ pub mod help_command {
   <b><cyan>create<r>    <d>{:<16}<r>     Create a new project from a template <d>(bun c)<r>
   <b><cyan>upgrade<r>                        Upgrade to latest version of Bun.
 
-  <b><blue>jitcache<r>  <d>clean [\\<path\\>]<r>       Remove a JITCache artifact's abandoned temporaries
-            <d>compact \\<ratio\\> [\\<path\\>] [--yes|--no]<r>
-                                 Clean, then evict the bodies that save the least warm-up per byte
+  <b><blue>jitcache<r>  <d>compact \\<ratio\\> [\\<path\\>] [--yes|--no]<r>
+                                 Clean up a JITCache artifact, then evict its least useful bodies
 
   <d>\\<command\\><r> <b><cyan>--help<r>               Print help text for command.
 "),
@@ -2261,15 +2260,14 @@ Full documentation is available at <magenta>https://bun.com/docs/cli/why<r>
             Tag::JITCacheCommand => {
                 pretty!(
                     "\
-<b>Usage<r>: <b><green>bun jitcache<r> <blue>clean<r> <d>[\\<path\\>]<r>
-       <b><green>bun jitcache<r> <blue>compact<r> <d>\\<ratio\\> [\\<path\\>]<r> <cyan>[--yes|--no]<r>
+<b>Usage<r>: <b><green>bun jitcache<r> <blue>compact<r> <d>\\<ratio\\> [\\<path\\>]<r> <cyan>[--yes|--no]<r>
   Maintain a JITCache artifact, ./.jitcache without a path.
 
 <b>Commands:<r>
-  <blue>clean<r>      Remove the temporaries an interrupted producer left
-  <blue>compact<r>    Clean, then evict the bodies that save the least warm-up per byte until the
-             evicted bytes reach \\<ratio\\>, between 0 and 1, of the artifact's bytes. Evicting
-             every body deletes the artifact and asks first; --yes and --no answer for it.
+  <blue>compact<r>    Remove what interrupted writes left and the dead bytes, then evict the bodies
+             that save the least warm-up per byte until the evicted bytes reach \\<ratio\\>,
+             between 0 and 1, of the artifact's bytes; 0 evicts nothing. Evicting every body
+             deletes the artifact and asks first; --yes and --no answer for it.
 "
                 );
                 Output::flush();

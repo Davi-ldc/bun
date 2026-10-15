@@ -1,5 +1,5 @@
 //! `bun jitcache`: JITCache's maintenance command line (SPEC-integrator.maintenance.md section 5),
-//! `clean [<path>]` and `compact <ratio> [<path>] [--yes|--no]`, on `./.jitcache` without a path. It needs no
+//! `compact <ratio> [<path>] [--yes|--no]`, on `./.jitcache` without a path. It needs no
 //! context, config or VM: `Bun__JITCache__runMaintenance` (src/jsc/bindings/JITCacheHost.cpp) hands the arguments to
 //! JSC's `Maintenance::runCommandLine`, whose exit code becomes Bun's.
 

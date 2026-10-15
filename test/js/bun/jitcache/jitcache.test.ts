@@ -463,43 +463,49 @@ describe.skipIf(!isLinux)("JITCache", () => {
     const committed = captures.filter(capture => capture.trigger === "delta" && capture.outcome === "committed");
     expect(committed.length).toBe(deltas[0].committedBodies);
     // The pack lists every committed key once, its newest version winning. The delta's pack event reports the pack it
-    // left and compacts exactly when the versions it superseded and the index deltas pass half of the pack.
+    // left, which it compacts exactly when the pack holds more than its live records and one full index (a 32-byte block
+    // header and an 80-byte entry per body); the compaction leaves exactly those.
     const keys = new Set(committed.map(capture => capture.key));
     const listed = new Set(packBodies(artifact).map(body => body.key));
     for (const key of keys) expect(listed.has(key)).toBe(true);
     const packs = eventsNamed(report, "pack");
     expect(packs).toHaveLength(1);
     expect(packs[0].bytes).toBe(packs[0].liveBytes + packs[0].deadBytes);
-    expect(packs[0].compacted).toBe(2 * packs[0].deadBytes > packs[0].bytes ? 1 : 0);
+    const denseBytes = packs[0].liveBytes + 32 + 80 * packs[0].bodies;
+    expect(packs[0].compacted).toBe(packs[0].bytes > denseBytes ? 1 : 0);
+    if (packs[0].compacted) expect(packs[0].compactedBytes).toBe(denseBytes);
   });
 
-  test.concurrent("bun jitcache clean and compact: exit codes, --yes, --no and no terminal", async () => {
+  test.concurrent("bun jitcache compact: exit codes, --yes, --no and no terminal", async () => {
     using dir = tempDir("jitcache-maintenance", {});
     const artifact = join(String(dir), "artifact");
     const missing = join(String(dir), "missing");
     await produce(artifact, String(dir));
     const maintenance = (...args: string[]) => bun(["jitcache", ...args], String(dir));
-    const summary = (run: Run) => run.stdout.split("\n").filter(line => /^(clean|compact): /.test(line));
+    const summary = (run: Run) => run.stdout.split("\n").filter(line => /^compact: /.test(line));
     const header = join(artifact, "cache", "header");
+    const pack = join(artifact, "cache", "pack");
 
+    // Ratio 0 evicts nothing: it removes the temporary and drops the pack's dead bytes, and reports both.
     const temporary = addTemporary(artifact, 100);
     const bodies = packBodies(artifact).length;
-    const cleaned = await maintenance("clean", artifact);
-    expect(summary(cleaned)).toEqual(["clean: done, 1 temporaries removed, 100 bytes reclaimed"]);
-    expect(cleaned.exitCode).toBe(0);
+    const packBytes = statSync(pack).size;
+    const cleanup = await maintenance("compact", "0", artifact);
+    const reclaimed = /^compact: done, 1 temporaries removed, 0 bodies evicted, (\d+) bytes reclaimed$/.exec(summary(cleanup)[0] ?? "");
+    expect(Number(reclaimed?.[1])).toBe(100 + packBytes - statSync(pack).size);
+    expect(cleanup.exitCode).toBe(0);
     expect(existsSync(temporary)).toBe(false);
     expect(packBodies(artifact).length).toBe(bodies);
 
-    const absent = await maintenance("clean", missing);
-    expect(summary(absent)).toEqual(["clean: no-artifact, 0 temporaries removed, 0 bytes reclaimed"]);
+    // A second one finds nothing left to remove.
+    const nothingLeft = await maintenance("compact", "0", artifact);
+    expect(summary(nothingLeft)).toEqual(["compact: done, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed"]);
+    expect(nothingLeft.exitCode).toBe(0);
+
+    const absent = await maintenance("compact", "0", missing);
+    expect(summary(absent)).toEqual(["compact: no-artifact, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed"]);
     expect(absent.exitCode).toBe(0);
     expect(existsSync(missing)).toBe(false);
-
-    // Ratio 0 evicts nothing; it drops the pack's dead bytes, the index deltas of the commits.
-    const onlyCleans = await maintenance("compact", "0", artifact);
-    expect(summary(onlyCleans)[0]).toMatch(/^compact: done, 0 temporaries removed, 0 bodies evicted, \d+ bytes reclaimed$/);
-    expect(onlyCleans.exitCode).toBe(0);
-    expect(packBodies(artifact).length).toBe(bodies);
 
     // A plan that deletes the whole artifact waits for confirmation; standard input is no terminal here, so compact
     // prints the plan, asks nothing and changes nothing.
@@ -525,23 +531,22 @@ describe.skipIf(!isLinux)("JITCache", () => {
     const usageErrors = [
       [],
       ["frobnicate"],
-      ["clean", artifact, missing],
-      ["clean", "--yes"],
+      ["clean", artifact],
       ["compact"],
       ["compact", "half"],
+      ["compact", "0", artifact, missing],
       ["compact", "1", artifact, "--maybe"],
     ];
     for (const args of usageErrors) {
       const usage = await maintenance(...args);
-      expect(usage.stderr).toContain("usage: clean [<path>]");
+      expect(usage.stderr).toContain("usage: compact <ratio> [<path>] [--yes | --no]");
       expect(usage.exitCode).toBe(2);
     }
 
     await whileAnotherProcessProduces(artifact, String(dir), "p-c", async () => {
-      const busyClean = await maintenance("clean", artifact);
-      expect(summary(busyClean)).toEqual(["clean: busy, 0 temporaries removed, 0 bytes reclaimed"]);
-      expect(busyClean.exitCode).toBe(3);
-      expect((await maintenance("compact", "0", artifact)).exitCode).toBe(3);
+      const busy = await maintenance("compact", "0", artifact);
+      expect(summary(busy)).toEqual(["compact: busy, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed"]);
+      expect(busy.exitCode).toBe(3);
     });
 
     // A tenth of the artifact's bytes takes at least one body and, with weigh and shape among them, not every body, so
@@ -642,25 +647,23 @@ describe.skipIf(!isLinux)("JITCache", () => {
     ]);
   });
 
-  test.concurrent("bun jitcache clean and compact without a path work on ./.jitcache", async () => {
+  test.concurrent("bun jitcache compact without a path works on ./.jitcache", async () => {
     using dir = tempDir("jitcache-default-path", { project: {}, empty: {} });
     const project = join(String(dir), "project");
     const artifact = join(project, ".jitcache");
     const created = await bun(["--jitcache", "--jitcache-mode=p", "--jitcache-strict", app], project);
     expect(created.exitCode).toBe(0);
-    addTemporary(artifact, 64);
+    const temporary = addTemporary(artifact, 64);
 
-    const cleaned = await bun(["jitcache", "clean"], project);
-    expect(cleaned.stdout).toContain("clean: done, 1 temporaries removed, 64 bytes reclaimed");
-    expect(cleaned.exitCode).toBe(0);
     const compacted = await bun(["jitcache", "compact", "0"], project);
-    expect(compacted.stdout).toMatch(/compact: done, 0 temporaries removed, 0 bodies evicted, \d+ bytes reclaimed/);
+    expect(compacted.stdout).toMatch(/compact: done, 1 temporaries removed, 0 bodies evicted, \d+ bytes reclaimed/);
     expect(compacted.exitCode).toBe(0);
+    expect(existsSync(temporary)).toBe(false);
     expect(existsSync(join(artifact, "cache", "header"))).toBe(true);
 
     const empty = join(String(dir), "empty");
-    const nothing = await bun(["jitcache", "clean"], empty);
-    expect(nothing.stdout).toContain("clean: no-artifact, 0 temporaries removed, 0 bytes reclaimed");
+    const nothing = await bun(["jitcache", "compact", "0"], empty);
+    expect(nothing.stdout).toContain("compact: no-artifact, 0 temporaries removed, 0 bodies evicted, 0 bytes reclaimed");
     expect(nothing.exitCode).toBe(0);
     expect(existsSync(join(empty, ".jitcache"))).toBe(false);
   });
