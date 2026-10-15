@@ -464,8 +464,8 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
     rustflags.push("--cfg=socket_fault_injection");
   }
   // `jitcache_twins`: JITCache's test builds (the debug-local-twins profile), the Rust counterpart of the C++ side's
-  // ENABLE_JITCACHE_TWINS. Only these builds declare the four JITCache flags of the harness sub-SPEC's section 5.1 that
-  // Bun takes (`RUNTIME_PARAMS_` in src/runtime/cli/Arguments.rs), so no other build of Bun has them. Only Bun's Rust
+  // ENABLE_JITCACHE_TWINS. Only these builds declare the four flags of JITCache's test builds that Bun takes
+  // (`RUNTIME_PARAMS_` in src/runtime/cli/Arguments.rs), so no other build of Bun has them. Only Bun's Rust
   // reads the cfg, so the engine's compile and link flags stay as every build has them.
   rustflags.push("--check-cfg=cfg(jitcache_twins)");
   if (cfg.jitcacheTwins) {

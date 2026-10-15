@@ -977,7 +977,7 @@ namespace Zig {
 DEFINE_NATIVE_MODULE(BunJSC)
 {
 #if ENABLE(JITCACHE_TWINS)
-    // JITCache's test builds export five more functions (SPEC-integrator.harness.md section 5.3).
+    // JITCache's test builds export five more functions, registered at the end of the list below.
     constexpr int jitCacheExports = 5;
 #else
     constexpr int jitCacheExports = 0;

@@ -1819,9 +1819,9 @@ impl VirtualMachine {
 
         ExitHandler::dispatch_on_exit(self);
 
-        // JITCache (SPEC-integrator.md section 11.2), once the user's exit handlers have run and before teardown: delta
-        // for a VM still producing, the warning of a fault, and the bench report's flush. Process exit is Bun's idle
-        // point, as it is for the Node compile cache below.
+        // JITCache, once the user's exit handlers have run and before teardown: delta for a VM still producing, the
+        // warning of a fault, and the bench report's flush. Process exit is Bun's idle point, as it is for the Node
+        // compile cache below.
         {
             unsafe extern "C" {
                 safe fn Bun__JITCache__atExit(global: &JSGlobalObject);

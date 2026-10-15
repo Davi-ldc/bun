@@ -1,7 +1,7 @@
-//! `bun jitcache`: JITCache's maintenance command line (SPEC-integrator.maintenance.md section 5),
-//! `compact [<ratio>] [<path>] [--yes|--no]`, with ratio 0 when the first argument is not a number and `./.jitcache`
-//! without a path. It needs no context, config or VM: `Bun__JITCache__runMaintenance` (src/jsc/bindings/JITCacheHost.cpp)
-//! hands the arguments to JSC's `Maintenance::runCommandLine` with the ratio optional, and its exit code becomes Bun's.
+//! `bun jitcache`: JITCache's maintenance command line, `compact [<ratio>] [<path>] [--yes|--no]`, with ratio 0 when
+//! the first argument is not a number and `./.jitcache` without a path. It needs no context, config or VM:
+//! `Bun__JITCache__runMaintenance` (src/jsc/bindings/JITCacheHost.cpp) hands the arguments to JSC's
+//! `Maintenance::runCommandLine` with the ratio optional, and its exit code becomes Bun's.
 
 use core::ffi::{c_char, c_int};
 
@@ -34,7 +34,7 @@ impl JITCacheCommand {
         // SAFETY: each pointer is a NUL-terminated argv entry that lives for the process, and `arguments` holds `argc`
         // of them.
         let code = unsafe { Bun__JITCache__runMaintenance(argc, arguments.as_ptr()) };
-        // The codes are 0 to 5 (maintenance sub-SPEC section 5).
+        // The maintenance command line's exit codes are 0 to 5.
         Global::exit(u32::try_from(code).unwrap_or(1));
     }
 }

@@ -574,9 +574,9 @@ pub struct RuntimeOptions {
     pub jitcache: JITCacheFlags,
 }
 
-/// JITCache's flags (SPEC-integrator.md section 11.2). Every VM `JITCacheHost::configureVM` configures reads them
-/// through `Bun__JITCache__flags` as `Bun::JITCacheFlags` (src/jsc/bindings/JITCacheHost.h), so the layout is C's and
-/// matches that struct field for field.
+/// JITCache's command-line flags. Every VM `JITCacheHost::configureVM` configures reads them through
+/// `Bun__JITCache__flags` as `Bun::JITCacheFlags` (src/jsc/bindings/JITCacheHost.h), so the layout is C's and matches
+/// that struct field for field.
 #[repr(C)]
 pub struct JITCacheFlags {
     /// `--jitcache`, resolved against the working directory; empty without the flag, which leaves JITCache off.
@@ -592,9 +592,9 @@ pub struct JITCacheFlags {
     pub delta_capture: u8,
     /// `--jitcache-bench-report`.
     pub bench_report_path: JITCacheText,
-    /// The four flags of the harness sub-SPEC's section 5.1 that Bun takes. Only twins builds declare and read them,
-    /// under `cfg(jitcache_twins)`, and act on them, under `ENABLE(JITCACHE_TWINS)`; every other build leaves them empty.
-    /// They stay in every build, so the Rust and C++ layouts agree whatever the two switches say.
+    /// The four flags of JITCache's test builds that Bun takes. Only twins builds declare and read them, under
+    /// `cfg(jitcache_twins)`, and act on them, under `ENABLE(JITCACHE_TWINS)`; every other build leaves them empty. They
+    /// stay in every build, so the Rust and C++ layouts agree whatever the two switches say.
     pub twins_report_path: JITCacheText,
     pub twins_record_layout_path: JITCacheText,
     /// `--jitcache-twins-avoid-layout`: the paths joined by `,`; empty for none.

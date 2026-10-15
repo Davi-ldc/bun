@@ -25,9 +25,8 @@
 #include <wtf/NeverDestroyed.h>
 #endif
 
-// Bun's side of JITCache (SPEC-integrator.md section 11.2). Every VM the host configures reads the flags Arguments::parse
-// read once per process; THREAD Session leaves to the host which VMs it configures and when it calls delta, and Bun
-// calls it at exit, its idle point.
+// Bun's side of JITCache. Every VM the host configures reads the flags Arguments::parse read once per process. JITCache
+// leaves to its host which VMs it configures and when it calls delta, and Bun calls delta at exit, its idle point.
 
 namespace Bun {
 
@@ -39,8 +38,8 @@ enum class VMKind : uint8_t {
     Other,
 };
 
-// SPEC-integrator.md N15: VirtualMachine::init gives the main thread's VM 1 and a worker's VM the worker's identifier,
-// which ScriptExecutionContext::generateIdentifier makes greater than 1, and the macro VMs and the debugger thread's VM
+// VirtualMachine::init gives the main thread's VM 1 and a worker's VM the worker's identifier, which
+// ScriptExecutionContext::generateIdentifier makes greater than 1, and the macro VMs and the debugger thread's VM
 // INT32_MAX.
 static VMKind kindOf(int32_t executionContextId)
 {
@@ -59,7 +58,7 @@ static String flagText(const JITCacheFlagText& text)
 }
 
 // A report's path or the body-event dump's: a worker VM's gets the suffix .<executionContextId>, so each VM writes a file
-// of its own, and the main VM's is the configured path, where the runner looks (harness sub-SPEC section 7.7).
+// of its own, and the main VM's is the configured path, where JITCache's test runner looks.
 static String pathFor(VMKind kind, int32_t executionContextId, const JITCacheFlagText& text)
 {
     String path = flagText(text);
@@ -96,7 +95,7 @@ static void warnOff(const String& line)
     writeStderrLineOnce(warnedOff, line);
 }
 
-// "<step>: <detail>", the form section 11.2 gives every line that names a step.
+// "<step>: <detail>", the form of every warning line that names a step.
 static String stepAndDetail(const String& step, const String& detail)
 {
     return makeString(step, ": "_s, detail);
@@ -144,8 +143,8 @@ static void startJITCache(JSC::VM& vm, VMKind kind, int32_t executionContextId, 
     JSC::JITCache::Config config;
     config.artifactPath = artifactPath;
     config.role = static_cast<Role>(flags.role);
-    // The producer limit is the host's to set: SIZE_MAX, what the jsc shell uses without --jitcache-max-memory, until the
-    // bench sets defaultProducerLimitBytes (section 16), from when the host leaves it empty for that default.
+    // The producer limit is the host's to set: SIZE_MAX, what the jsc shell uses without --jitcache-max-memory, until
+    // defaultProducerLimitBytes gets the value the bench measures, from when the host leaves it empty for that default.
     config.producerLimitBytes = std::numeric_limits<size_t>::max();
     config.strict = flags.strict;
     config.deltaCapture = static_cast<JSC::JITCache::DeltaCapture>(flags.deltaCapture);
@@ -153,9 +152,9 @@ static void startJITCache(JSC::VM& vm, VMKind kind, int32_t executionContextId, 
     config.twinReportPath = pathFor(kind, executionContextId, flags.twinsReportPath);
 
     JSC::JITCache::StartResult result = JSC::JITCache::start(vm, config);
-    // Busy records nothing (THREAD Session). A worker whose producing role met the lock its process's main VM holds
-    // starts again as a Consumer, sharing the main VM's opened artifact and index, which each of its commits updates, so
-    // code that only workers run is not captured.
+    // A Busy start records nothing, so the host may call start again. A worker whose producing role met the lock its
+    // process's main VM holds starts again as a Consumer, sharing the main VM's opened artifact and index, which each of
+    // its commits updates, so code that only workers run is not captured.
     if (result.outcome == StartOutcome::Busy && kind == VMKind::Worker && mainVMProduces.load()) {
         config.role = Role::Consumer;
         result = JSC::JITCache::start(vm, config);
@@ -197,7 +196,8 @@ void configureVM(JSC::VM& vm, int32_t executionContextId)
     String artifactPath = flagText(flags.artifactPath);
 
 #if ENABLE(JITCACHE_TWINS)
-    // Harness sub-SPEC section 4: the main VM's heap probes, with or without --jitcache.
+    // With or without --jitcache, the layout record also gets the main VM's heap probes: the addresses of the VM, a cell
+    // and an atom.
     if (kind == VMKind::Main) {
         if (String layoutPath = flagText(flags.twinsRecordLayoutPath); !layoutPath.isEmpty())
             JSC::JITCache::recordVMLayout(vm, layoutPath);
@@ -214,7 +214,7 @@ void configureVM(JSC::VM& vm, int32_t executionContextId)
 #if ENABLE(JITCACHE_TWINS)
 void willInitializeJSC()
 {
-    // An empty value is an empty list, which the first run of a sequence gets (harness sub-SPEC section 5.1).
+    // An empty value is an empty list, which the first run of a runner's sequence gets.
     Vector<String> layoutPaths;
     if (String paths = JITCacheHostInternal::flagText(Bun__JITCache__flags()->twinsAvoidLayoutPaths); !paths.isEmpty())
         layoutPaths = paths.split(',');

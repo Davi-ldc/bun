@@ -776,7 +776,7 @@ export const defines: Flag[] = [
     // slash(): path becomes a C string literal — `\U` would be a unicode escape.
     flag: c => `BUN_DYNAMIC_JS_LOAD_PATH=\\"${slash(join(c.buildDir, "js"))}\\"`,
     // JITCache's test builds embed the internal modules as a release build does, so each module's digest comes from
-    // its provider (SPEC-integrator.harness.md section 1).
+    // its provider.
     when: c => c.debug && !c.ci && !c.jitcacheTwins,
     desc: "Hot-reload built-in JS from build dir (dev convenience)",
   },

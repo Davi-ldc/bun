@@ -298,9 +298,8 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     ),
     parse_param!("--cron-title <STR>               Title for cron execution mode"),
     parse_param!("--cron-period <STR>              Cron period for cron execution mode"),
-    // JITCache (SPEC-integrator.md section 11.2): the jsc shell's flags with the same syntax, except the shell's
-    // --jitcache-maintenance, --jitcache-log and --jitcache-max-memory, and --jitcache-delta-at-exit, which here takes a
-    // value and is on by default.
+    // JITCache: the jsc shell's flags with the same syntax, except the shell's --jitcache-maintenance, --jitcache-log
+    // and --jitcache-max-memory, and --jitcache-delta-at-exit, which here takes a value and is on by default.
     parse_param!(
         "--jitcache <STR>?                 Run with JITCache over the artifact at the given path (./.jitcache by default)"
     ),
@@ -319,8 +318,8 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
     parse_param!(
         "--jitcache-bench-report <STR>     Append JITCache's bench report to the given path"
     ),
-    // The four flags of JITCache's test builds that Bun takes (SPEC-integrator.harness.md section 5.1), declared only in
-    // those builds, which scripts/build/rust.ts gives cfg(jitcache_twins), and hidden from --help: no help text.
+    // The four flags of JITCache's test builds that Bun takes, declared only in those builds, which
+    // scripts/build/rust.ts gives cfg(jitcache_twins), and hidden from --help: no help text.
     #[cfg(jitcache_twins)]
     parse_param!("--jitcache-twins-report <STR>"),
     #[cfg(jitcache_twins)]
@@ -822,10 +821,10 @@ fn invalid_jitcache_flag(flag: &str, value: &[u8], expected: &str) -> ! {
     Global::exit(1);
 }
 
-/// JITCache's flags (SPEC-integrator.md section 11.2), read once per process with the other runtime flags; a
-/// malformed value is a command-line error, and the last occurrence of a flag wins. Every path is resolved against the
-/// working directory after `--cwd`: each VM `JITCacheHost::configureVM` configures reads these flags, and a relative
-/// path would follow a `process.chdir` made before a worker starts.
+/// JITCache's flags, read once per process with the other runtime flags; a malformed value is a command-line error,
+/// and the last occurrence of a flag wins. Every path is resolved against the working directory after `--cwd`: each VM
+/// `JITCacheHost::configureVM` configures reads these flags, and a relative path would follow a `process.chdir` made
+/// before a worker starts.
 // Plain cargo runs do not declare `jitcache_twins` (see `RUNTIME_PARAMS_`).
 #[allow(unexpected_cfgs)]
 fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFlags {
@@ -884,8 +883,8 @@ fn parse_jitcache_flags(args: &clap::Args<clap::Help>, cwd: &[u8]) -> JITCacheFl
         };
     }
     flags.bench_report_path = path_flag("--jitcache-bench-report");
-    // Only twins builds declare the four flags of the harness sub-SPEC's section 5.1, so only they read them; every other
-    // build leaves their fields empty, in the one layout JITCacheFlags has.
+    // Only twins builds declare the four flags below, so only they read them; every other build leaves their fields
+    // empty, in the one layout JITCacheFlags has.
     #[cfg(jitcache_twins)]
     {
         flags.twins_report_path = path_flag("--jitcache-twins-report");

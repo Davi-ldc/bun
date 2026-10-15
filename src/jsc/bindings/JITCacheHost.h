@@ -5,9 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Bun's side of JITCache (SPEC-integrator.md section 11.2): the flags, each VM's start, the exit work and `bun jitcache`.
-// It calls JSC only through the exported headers <JavaScriptCore/JITCacheAPI.h>, <JavaScriptCore/JITCacheMaintenance.h>
-// and <JavaScriptCore/JITCacheTwinsHost.h> (section 3.5).
+// Bun's side of JITCache: the flags, each VM's start, the exit work and `bun jitcache`. Bun's build sees only the headers
+// JavaScriptCore exports, so this code reaches JITCache through <JavaScriptCore/JITCacheAPI.h>,
+// <JavaScriptCore/JITCacheMaintenance.h> and <JavaScriptCore/JITCacheTwinsHost.h> alone.
 
 namespace JSC {
 class JSGlobalObject;
@@ -32,7 +32,7 @@ struct JITCacheFlags {
     bool deltaAtExit; // --jitcache-delta-at-exit, on unless =0: the exit hook calls delta for a VM still producing
     uint8_t deltaCapture; // --jitcache-delta-capture, as JSC::JITCache::DeltaCapture: 1 all (the default), 2 compiled
     JITCacheFlagText benchReportPath; // --jitcache-bench-report
-    // The four flags of harness sub-SPEC section 5.1 that Bun takes. Only twins builds declare and read them, under
+    // The four flags of JITCache's test builds that Bun takes. Only twins builds declare and read them, under
     // cfg(jitcache_twins), and act on them, under ENABLE(JITCACHE_TWINS); every other build leaves them empty. They stay
     // in every build, so this layout and context.rs's agree whatever the two switches say.
     JITCacheFlagText twinsReportPath; // --jitcache-twins-report
@@ -52,8 +52,10 @@ namespace JITCacheHost {
 void configureVM(JSC::VM&, int32_t executionContextId);
 
 #if ENABLE(JITCACHE_TWINS)
-// JSCInitialize calls them once per process, right before and right after JSC::initialize: the address-space placement
-// and layout record of harness sub-SPEC section 4, from --jitcache-twins-avoid-layout and --jitcache-twins-record-layout.
+// JSCInitialize calls them once per process, right before and right after JSC::initialize. The first maps placeholders
+// over the ranges the --jitcache-twins-avoid-layout files record, so this process's executable pool and structure
+// reservation land elsewhere; the second removes them and writes this process's two ranges to the
+// --jitcache-twins-record-layout file.
 void willInitializeJSC();
 void didInitializeJSC();
 #endif
@@ -71,6 +73,6 @@ extern "C" const Bun::JITCacheFlags* Bun__JITCache__flags();
 // bench report's flush in every role.
 extern "C" void Bun__JITCache__atExit(JSC::JSGlobalObject*);
 
-// `bun jitcache <command>` (maintenance sub-SPEC section 5): runs the maintenance command line on argv[0..argc), compact's
-// ratio optional, with stdin, stdout and stderr, and returns its exit code. It needs no VM.
+// `bun jitcache <command>`: runs the maintenance command line on argv[0..argc), compact's ratio optional, with stdin,
+// stdout and stderr, and returns its exit code. It needs no VM.
 extern "C" int Bun__JITCache__runMaintenance(int argc, const char* const* argv);

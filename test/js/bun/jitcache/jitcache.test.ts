@@ -1,9 +1,8 @@
-// JITCache in Bun (SPEC-integrator.md section 15.3): the flags of section 11.2, the host's warnings and its delta at
-// exit, workers, bench reports and `bun jitcache` (SPEC-integrator.maintenance.md section 5), each consumer's output
-// compared with a JITCache-off run's. Every check reads what any build of Bun shows: standard output and error, exit
-// codes, the artifact's files and the bench report, whose start, install, capture and delta events say what each VM did
-// (SPEC-integrator.harness.md section 9.2). JITCache runs only on Linux, where start configures a VM; elsewhere it
-// returns Rejected at start.platform.
+// JITCache in Bun: its flags, the host's warnings and its delta at exit, workers, bench reports and `bun jitcache`, each
+// consumer's output compared with a JITCache-off run's. Every check reads what any build of Bun shows: standard output
+// and error, exit codes, the artifact's files and the bench report, whose start, install, capture and delta events say
+// what each VM did. JITCache runs only on Linux, where start configures a VM; elsewhere it returns Rejected at
+// start.platform.
 import { describe, expect, test } from "bun:test";
 import { bunEnv, bunExe, isLinux, tempDir } from "harness";
 import {
@@ -61,7 +60,7 @@ function offOutput(appArgs: string[] = []): Promise<string> {
   return output;
 }
 
-// The lines the host writes when JITCache turns itself off or replaces a cache (section 11.2).
+// The lines the host writes when JITCache turns itself off or replaces a cache.
 function warnings(stderr: string): string[] {
   return stderr.split("\n").filter(line => line.startsWith("warn: JITCache"));
 }
@@ -187,9 +186,9 @@ async function whileAnotherProcessProduces(artifact: string, cwd: string, mode: 
 }
 
 // `bun jitcache compact 1 <artifact>` on a pseudo-terminal, where a plan that deletes the whole artifact asks before it
-// applies (maintenance sub-SPEC section 5). answer is what the user types once the question appears, and beforeAnswer
-// runs while compact waits, the producer lock released (section 4.4). Standard input, output and error all go through
-// the terminal, which turns each line's end into \r\n.
+// applies. answer is what the user types once the question appears, and beforeAnswer runs while compact waits with
+// the producer lock released. Standard input, output and error all go through the terminal, which turns each line's
+// end into \r\n.
 async function compactOnTerminal(artifact: string, cwd: string, answer: string, beforeAnswer = () => {}) {
   const summaryLine = /compact: [a-z-]+, \d+ temporaries removed, \d+ bodies evicted, \d+ bytes reclaimed/;
   const decoder = new TextDecoder();
@@ -219,7 +218,7 @@ async function compactOnTerminal(artifact: string, cwd: string, answer: string, 
   return { output, exitCode };
 }
 
-// CRC-32C, the checksum of the artifact's header and body files (container sub-SPEC section 4.4).
+// CRC-32C, the checksum of the artifact's header and body files.
 const crc32cTable = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; ++n) {
@@ -241,8 +240,8 @@ function dataView(bytes: Buffer): DataView {
 }
 
 // Rewrites the artifact's header as another build of Bun would have written it: the main executable's build ID differs
-// in its first byte, and the CRC covers the new bytes, so the header is well formed but incompatible (container
-// sub-SPEC sections 3.1 and 3.2). Returns the header's bytes before the rewrite.
+// in its first byte, and the CRC covers the new bytes, so the header is well formed but incompatible. Returns the
+// header's bytes before the rewrite.
 function rewriteHeaderAsAnotherBuild(artifact: string): Buffer {
   const path = join(artifact, "cache", "header");
   const original = readFileSync(path);
@@ -261,10 +260,9 @@ function rewriteHeaderAsAnotherBuild(artifact: string): Buffer {
   return original;
 }
 
-// Sets ucb.feedback's reserved byte 39 (SPEC-ucb.md section 5.2) in a body file and reseals the section's, the
-// directory's and the envelope's CRCs (container sub-SPEC sections 4.1 and 4.2). The body keeps its integrity, which
-// every mode checks, and breaks a rule only strict checks (SPEC-ucb.md section 10.2, SV1); with strict off nothing
-// reads the byte.
+// Sets ucb.feedback's reserved byte 39 in a body file and reseals the section's, the directory's and the envelope's
+// CRCs. The body keeps its integrity, which every mode checks, and breaks a rule only strict checks, that byte 39 is
+// zero; with strict off nothing reads the byte.
 function breakFeedbackRuleOnlyStrictChecks(bytes: Buffer) {
   const view = dataView(bytes);
   expect(bytes.subarray(0, 8).toString("latin1")).toBe("JITCBODY");
@@ -275,7 +273,7 @@ function breakFeedbackRuleOnlyStrictChecks(bytes: Buffer) {
   let feedbackSections = 0;
   for (let index = 0; index < sectionCount; ++index) {
     const entry = 128 + 24 * index;
-    // ucb.feedback: type id 0x0103, tier 0 (SPEC-integrator.md section 6.1).
+    // ucb.feedback: type id 0x0103, tier 0.
     if (view.getUint16(entry, true) !== 0x0103 || bytes[entry + 2] !== 0) continue;
     const offset = Number(view.getBigUint64(entry + 8, true));
     const size = Number(view.getBigUint64(entry + 16, true));
@@ -398,7 +396,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     using dir = tempDir("jitcache-shell-flags", {});
     const artifact = join(String(dir), "artifact");
     const report = join(String(dir), "producer.jsonl");
-    // The jsc shell's flags (section 11.1): Bun writes no log line, and a limit of one page, which would refuse the
+    // Flags only the jsc shell takes: Bun writes no log line, and a limit of one page, which would refuse the
     // writer's staging buffer and so every commit, does not apply.
     const flags = ["--jitcache-log", "--jitcache-max-memory=4096", `--jitcache-bench-report=${report}`];
     const run = await produce(artifact, String(dir), [], flags);
@@ -430,7 +428,7 @@ describe.skipIf(!isLinux)("JITCache", () => {
     const report = join(reports, "report.jsonl");
     // bun build reads no runtime flag, so JITCache is off in every VM it creates. Bun.build runs the same bundler in a
     // process whose flags Bun read: the main VM produces, and the macro runs in a VM the bundler creates on a thread of
-    // its pool, which configureVM must leave alone (section 11.2).
+    // its pool, which configureVM must leave alone.
     const flags = [`--jitcache=${artifact}`, "--jitcache-mode=p", "--jitcache-strict"];
     const run = await bun([...flags, `--jitcache-bench-report=${report}`, macroBuild], String(dir));
     expect(warnings(run.stderr)).toEqual([]);
@@ -719,8 +717,8 @@ describe.skipIf(!isLinux)("JITCache", () => {
 
   test.concurrent("--jitcache-delta-capture: all, the default, also commits bodies without an image, compiled does not", async () => {
     using dir = tempDir("jitcache-delta-capture", {});
-    // The app's top level runs once and never compiles, so with all the delta at exit commits it at tier 0 (THREAD
-    // Capture); weigh and shape compile, so every value commits them with an image.
+    // The app's top level runs once and never compiles, so with all the delta at exit commits it at tier 0; weigh and
+    // shape compile, so every value commits them with an image.
     const cases: [string[], boolean][] = [
       [[], true],
       [["--jitcache-delta-capture=all"], true],

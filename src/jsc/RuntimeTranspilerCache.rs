@@ -64,10 +64,10 @@ unsafe extern "C" {
     fn Bun__JITCacheSourceDigestUTF16(ptr: *const u16, len: usize, out: *mut u8);
 }
 
-/// JITCache's source digest of the text a cache hit gives the module's provider (SPEC-ucb.md section 3.5), computed
-/// once, when the entry is written, so a later process keys the module without hashing its text. Latin-1 output and
-/// ASCII UTF-8 output are those code units; UTF-16 output is digested as UTF-16, which narrows itself when every unit
-/// fits Latin-1. Non-ASCII UTF-8 output gets none (32 zero bytes): a hit transcodes it, and JITCache digests the result.
+/// JITCache's source digest of the text a cache hit gives the module's provider, computed once, when the entry is
+/// written, so a later process keys the module without hashing its text. Latin-1 output and ASCII UTF-8 output are
+/// those code units; UTF-16 output is digested as UTF-16, which narrows itself when every unit fits Latin-1.
+/// Non-ASCII UTF-8 output gets none (32 zero bytes): a hit transcodes it, and JITCache digests the result.
 fn jitcache_source_digest(output_code: &BunString) -> [u8; 32] {
     let mut digest = [0u8; 32];
     if output_code.is_utf16() {
